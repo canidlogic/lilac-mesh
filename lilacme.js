@@ -33,8 +33,8 @@
  * for lilacme().
  * 
  * You must also have a "lilacme2json" or "lilacme2json.exe" program
- * binary in the same directory as this script.  This program is part of
- * the main Lilac project.
+ * binary in the same directory as this script.  This program is given
+ * in the util directory.
  * 
  * For further information, see server.md
  */
