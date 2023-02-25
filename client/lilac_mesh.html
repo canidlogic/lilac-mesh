@@ -46,77 +46,47 @@ canvas {
   margin-top: 1em;
 }
 
-#divTrace {
-  margin-top: 1.5em;
-}
-
-#divSource {
-  margin-top: 1.5em;
-}
-
-#divOpenBtn {
-  margin-top: 1.5em;
-  padding-top: 0.5em;
-  border-top: thin solid;
-}
-
-#divOpenWarn {
-  margin-top: 1.5em;
-  color: red;
-  font-weight: bold;
-  display: None;
-}
-
-#divTraceError {
-  margin-top: 1.5em;
-  color: red;
-  font-weight: bold;
-  display: None;
-}
-
-#divMeshLoadError {
-  margin-top: 1.5em;
-  color: red;
-  font-weight: bold;
-  display: None;
-}
-
-#divLoadingActive {
-  font-style: italic;
+#divLayerOptions {
+  margin-top: 1em;
 }
 
 #divSplash {
   font-style: italic;
 }
 
-#divOpen {
-  display: None;
-}
-
-#divLoading {
-  display: None;
-}
-
 #divMain {
   display: None;
 }
 
+#divClose {
+  display: None;
+}
+
+#divCloseError {
+  display: None;
+}
+
     </style>
+    
+    <!-- If JavaScript disabled, do not show the splash screen -->
     <noscript>
       <style>
 
-#divOpen {
+#divSplash {
   display: None;
 }
 
       </style>
     </noscript>
+    
+    <!-- Load all of the client-side JavaScript modules -->
     <script src="load_screen.js"></script>
     <script src="main_screen.js"></script>
-    <script src="open_screen.js"></script>
+    
     <script src="CanvasView.js"></script>
     <script src="LilacMesh.js"></script>
-    <script src="lilac_mesh.js"></script>
+    
+    <!-- Embedded script is for presentation tier functionality -->
     <script>
 
 // Wrap everything in an anonymous function that we immediately invoke
@@ -124,6 +94,25 @@ canvas {
 // added to global scope
 (function() {
   
+  /*
+   * Local constants
+   * ===============
+   */
+
+  /*
+   * Array of all the mode radio option button IDs.
+   */
+  var RADIO_MODES = [
+    "radAdd", "radSelSingle", "radSelMulti", "radUnSel", "radMove"
+  ];
+  
+  /*
+   * Array of all the layer visibility check box IDs.
+   */
+  var LAYER_CHECKS = [
+    "chkShowTrace", "chkShowFill", "chkShowNormals"
+  ];
+
   /*
    * Local data
    * ==========
@@ -173,118 +162,435 @@ canvas {
   }
   
   /*
-   * Public functions
-   * ================
-   */
-
-  /*
-   * Update the DIV visibility within the open screen DIV to show a
-   * specific error message, or no error message.
+   * Given a string, apply HTML entity escapes so that it can be
+   * displayed in HTML code.
    *
-   * The open files DIV does NOT need to be active to use this function.
-   * This simply updates the DIV styles within the open screen DIV.
+   * This applies entity escapes for & < > symbols.
    *
-   * er must be one of the following:
-   *
-   *   "none" - no error to display
-   *   "warn" - error: you must specify a trace file
-   *   "trace" - error loading trace image
-   *   "mesh" - error loading mesh file
+   * Also, if the result is an empty string, it is replaced with &nbsp;
    *
    * Parameters:
    *
-   *   er : string - the error DIV to show, or "none"
-   */
-  function openError(er) {
-    
-    var func_name = "openError";
-    var eWarn, eTrace, eMesh;
-    
-    // Check parameter type
-    if (typeof er !== "string") {
-      fault(func_name, 100);
-    }
-    
-    // Locate the error message DIV elements
-    eWarn = document.getElementById("divOpenWarn");
-    eTrace = document.getElementById("divTraceError");
-    eMesh = document.getElementById("divMeshLoadError");
-    
-    if ((eWarn == null) || (eTrace == null) || (eMesh == null)) {
-      fault(func_name, 200);
-    }
-    
-    // Make all DIVs invisible
-    eWarn.style.display = "none";
-    eTrace.style.display = "none";
-    eMesh.style.display = "none";
-    
-    // If something other than "none" was passed, show the correct error
-    // message
-    if (er !== "none") {
-      if (er === "warn") {
-        eWarn.style.display = "block";
-        
-      } else if (er === "trace") {
-        eTrace.style.display = "block";
-        
-      } else if (er === "mesh") {
-        eMesh.style.display = "block";
-        
-      } else {
-        // Unrecognized error identifier
-        fault(func_name, 300);
-      }
-    }
-  }
-  
-  /*
-   * Get the File objects corresponding to the input files the user has
-   * selected.
-   *
-   * The open files DIV does NOT need to be active to use this function.
-   * This simply gets the current values from the controls within the
-   * open screen DIV.
-   *
-   * The return value is a result object with two properties, "trace"
-   * and "mesh".  Each property is either a File object for the file the
-   * user has selected, or false if the user hasn't chosen anything.
+   *   str : string - the string to escape
    *
    * Return:
    *
-   *   a result object in the format noted above
+   *   the escaped string
    */
-  function getFiles() {
+  function escapeString(str) {
     
-    var func_name = "getFiles";
-    var eTrace, eMesh;
-    var result;
+    var func_name = "escapeString";
     
-    // Get the file controls
-    eTrace = document.getElementById("fTrace");
-    eMesh = document.getElementById("fSource");
-    
-    if ((eTrace == null) || (eMesh == null)) {
+    // Check parameter
+    if (typeof str !== "string") {
       fault(func_name, 100);
     }
     
-    // Start with the result having no files
-    result = {
-      trace: false,
-      mesh: false
-    };
+    // Apply & escape first
+    str = str.replace("&", "&amp;");
     
-    // Make sure neither control has more than one file
-    if ((eTrace.files.length > 1) || (eMesh.files.length > 1)) {
+    // Apply other escapes
+    str = str.replace("<", "&lt;");
+    str = str.replace(">", "&gt;");
+    
+    // Special empty string handler
+    if (str.length < 1) {
+      str = "&nbsp;";
+    }
+    
+    // Return escaped string
+    return str;
+  }
+  
+  /*
+   * Get the client X/Y coordinates of the main canvas.
+   *
+   * Return:
+   *
+   *   an array with two numbers, the first being the X coordinate and
+   *   the second being the Y coordinate
+   */
+  function main_canvas_root() {
+    
+    var func_name = "main_canvas_root";
+    var eCanvas;
+    var r;
+    var x;
+    var y;
+    
+    // Get the canvas element
+    eCanvas = document.getElementById("cnvMain");
+    if (eCanvas == null) {
+      fault(func_name, 100);
+    }
+    
+    // Get the bounding rectangle for the canvas
+    r = eCanvas.getBoundingClientRect();
+    
+    // Get the X and Y coordinates from the bounding rectangle
+    x = r.x;
+    y = r.y;
+    
+    // Adjust X and Y to skip over element border
+    x = x + eCanvas.clientLeft;
+    y = y + eCanvas.clientTop;
+    
+    // Return result
+    return [x, y];
+  }
+  
+  /*
+   * Event handler for handling changes to the canvas size option box.
+   *
+   * IMPORTANT:  You must register the canvas element with the module
+   * main_screen using main_screen.storeCanvas() before this event
+   * handler is invoked.
+   */
+  function resizeChanged() {
+    
+    var func_name = "resizeChanged";
+    var eOpt;
+    var eCanvas;
+    var sv;
+    var sza;
+    var i;
+    var j;
+    var c;
+    var new_width;
+    var new_height;
+    
+    // Get the size option control and the canvas
+    eOpt = document.getElementById("optSize");
+    eCanvas = document.getElementById("cnvMain");
+    
+    if ((eOpt == null) || (eCanvas == null)) {
+      fault(func_name, 100);
+    }
+    
+    // Get the string value of the option control
+    sv = eOpt.value;
+    
+    // String value must be at least seven characters to be valid
+    if (sv.length < 7) {
       fault(func_name, 200);
     }
     
-    // Store any selected files in the result object
-    if (eTrace.files.length === 1) {
-      result.trace = eTrace.files[0];
+    // First four characters must be "size"
+    if (sv.slice(0, 4) !== "size") {
+      fault(func_name, 300);
     }
-    if (eMesh.files.length === 1) {
-      result.mesh = eMesh.files[0];
+    
+    // Drop the first four characters
+    sv = sv.slice(4);
+    
+    // Rest of the string value should be split around an "x" delimiter
+    sza = sv.split("x");
+    if (sza.length !== 2) {
+      fault(func_name, 400);
+    }
+    
+    // Both of the field elements should be at least one character
+    if ((sza[0].length < 1) || (sza[1].length < 1)) {
+      fault(func_name, 500);
+    }
+    
+    // Both field elements should only have decimal digits
+    for(j = 0; j < sza.length; j++) {
+      for(i = 0; i < sza[j].length; i++) {
+        c = sza[j].charCodeAt(i);
+        if ((c < 0x30) || (c > 0x39)) {
+          fault(func_name, 600);
+        }
+      }
+    }
+    
+    // We can now get the desired width and height
+    new_width = parseInt(sza[0], 10);
+    new_height = parseInt(sza[1], 10);
+    
+    if ((!isFinite(new_width)) || (!isFinite(new_height))) {
+      fault(func_name, 650);
+    }
+    
+    // Check that new width and height are at least two
+    if ((new_width < 2) || (new_height < 2)) {
+      fault(func_name, 675);
+    }
+    
+    // Ignore the event if new width and height same as current
+    // dimensions
+    if ((new_width === eCanvas.width) && 
+        (new_height === eCanvas.height)) {
+      return;
+    }
+    
+    // If we got here, resize the canvas
+    main_screen.resize(new_width, new_height);
+  }
+  
+  /*
+   * Event handler for when the pointer is pressed down on the main
+   * canvas.
+   *
+   * Note that this will call preventDefault() on the event so that
+   * mouse events will not be fired.
+   *
+   * Event is ignored if main div is not displayed
+   *
+   * Parameters:
+   *
+   *   event : PointerEvent - the event data
+   */
+  function handlePointerDown(event) {
+    
+    var func_name = "handlePointerDown";
+    var cx, cy, cr;
+    var eCanvas;
+    
+    // Ignore if not showing main
+    if (m_screen !== "main") {
+      return;
+    }
+    
+    // Check parameter
+    if ((typeof event !== "object") ||
+          (!(event instanceof PointerEvent))) {
+      fault(func_name, 100);
+    }
+    
+    // Get the canvas (x,y) coordinate
+    cr = main_canvas_root();
+    cx = event.clientX - cr[0];
+    cy = event.clientY - cr[1];
+    
+    // Call into the main screen event handler
+    if (main_screen.handlePointerDown(cx, cy)) {
+      
+      // The pointer down handler returned true, so we need to capture
+      // the pointer and register event handlers -- first get the canvas
+      // element
+      eCanvas = document.getElementById("cnvMain");
+      if (eCanvas == null) {
+        fault(func_name, 200);
+      }
+      
+      // Register event handlers
+      eCanvas.onpointermove = handlePointerMove;
+      eCanvas.onpointerup = handlePointerUp;
+      
+      // Capture the pointer
+      eCanvas.setPointerCapture(event.pointerId);
+    }
+    
+    // Cancel mouse events since we already handled pointer
+    event.preventDefault();
+  }
+  
+  /*
+   * Event handler for when the pointer moves on the main canvas and it
+   * is captured.
+   *
+   * This should NOT be registered in the main event handler
+   * registration code.  This is registered as needed by
+   * handlePointerDown().
+   *
+   * Note that this will call preventDefault() on the event so that
+   * mouse events will not be fired.
+   *
+   * Parameters:
+   *
+   *   event : PointerEvent - the event data
+   */
+  function handlePointerMove(event) {
+    
+    var func_name = "handlePointerMove";
+    var cx, cy, cr;
+    
+    // Check parameter
+    if ((typeof event !== "object") ||
+          (!(event instanceof PointerEvent))) {
+      fault(func_name, 100);
+    }
+    
+    // Get the canvas (x,y) coordinate
+    cr = main_canvas_root();
+    cx = event.clientX - cr[0];
+    cy = event.clientY - cr[1];
+    
+    // Call into the main screen event handler
+    main_screen.handlePointerDrag(cx, cy);
+    
+    // Cancel mouse events since we already handled pointer
+    event.preventDefault();
+  }
+  
+  /*
+   * Event handler for when the pointer is released on the main canvas
+   * and it is captured.
+   *
+   * This should NOT be registered in the main event handler
+   * registration code.  This is registered as needed by
+   * handlePointerDown().
+   *
+   * Note that this will call preventDefault() on the event so that
+   * mouse events will not be fired.
+   *
+   * Parameters:
+   *
+   *   event : PointerEvent - the event data
+   */
+  function handlePointerUp(event) {
+    
+    var func_name = "handlePointerUp";
+    var eCanvas;
+    
+    // Check parameter
+    if ((typeof event !== "object") ||
+          (!(event instanceof PointerEvent))) {
+      fault(func_name, 100);
+    }
+    
+    // Get the canvas element
+    eCanvas = document.getElementById("cnvMain");
+    if (eCanvas == null) {
+      fault(func_name, 200);
+    }
+    
+    // Release pointer capture and unregister move and up handlers
+    eCanvas.onpointermove = null;
+    eCanvas.onpointerup = null;
+    eCanvas.releasePointerCapture(event.pointerId);
+    
+    // Cancel mouse events since we already handled pointer
+    event.preventDefault();
+    
+    // Call into the main screen event handler
+    main_screen.handlePointerRelease();
+  }
+  
+  /*
+   * Public functions
+   * ================
+   */
+  
+  /*
+   * Based on the radio controls, determine what the click mode is.
+   *
+   * The return value is one of the following strings:
+   *
+   *   "add" - add points mode
+   *   "sel_single" - select single point mode
+   *   "sel_multi" - select multiple points mode
+   *   "unsel" - unselect points mode
+   *   "move" - move points mode
+   *
+   * Return:
+   *
+   *   string indicating the selected click mode
+   */
+  function getClickMode() {
+    
+    var func_name = "getClickMode";
+    var mode;
+    var i;
+    var e;
+    var s;
+    
+    // Determine which radio control is selected
+    mode = false;
+    for(i = 0; i < RADIO_MODES.length; i++) {
+      // Get current radio control
+      e = document.getElementById(RADIO_MODES[i]);
+      if (e == null) {
+        fault(func_name, 100);
+      }
+      
+      // Check whether selected
+      if (e.checked) {
+        // Check whether mode has already been set
+        if (mode === false) {
+          // Mode not already set, so set mode depending on which
+          // control this is
+          s = RADIO_MODES[i];
+          if (s === "radAdd") {
+            mode = "add";
+          } else if (s === "radSelSingle") {
+            mode = "sel_single";
+          } else if (s === "radSelMulti") {
+            mode = "sel_multi";
+          } else if (s === "radUnSel") {
+            mode = "unsel";
+          } else if (s === "radMove") {
+            mode = "move";
+          } else {
+            // Unrecognized radio control
+            fault(func_name, 200);
+          }
+          
+        } else {
+          // Mode already set, so error
+          fault(func_name, 300);
+        }
+      }
+    }
+    
+    // Make sure we got a mode
+    if (mode === false) {
+      fault(func_name, 400);
+    }
+    
+    // Return mode
+    return mode;
+  }
+  
+  /*
+   * Based on the layer visibility checkboxes, determine what the layer
+   * visibility options are.
+   *
+   * The return value is an object with the following properties, each
+   * of which has a boolean value:
+   *
+   *   "showTrace" - true if the trace image should be shown
+   *   "showFill" - true if triangle fills should be shown
+   *   "showNormals" - true if normals should be shown
+   *
+   * Return:
+   *
+   *   the current layer visibility options
+   */
+  function getLayerVisibility() {
+    
+    var func_name = "getLayerVisibility";
+    var result;
+    var i, e, s;
+    
+    // Start with an empty object
+    result = {};
+    
+    // Go through all the layer visibility checkboxes and build the
+    // desired options
+    for(i = 0; i < LAYER_CHECKS.length; i++) {
+      // Get the current checkbox
+      e = document.getElementById(LAYER_CHECKS[i]);
+      if (e == null) {
+        fault(func_name, 100);
+      }
+      
+      // Add the appropriate options
+      s = LAYER_CHECKS[i];
+      if (s === "chkShowTrace") {
+        result.showTrace = e.checked;
+        
+      } else if (s === "chkShowFill") {
+        result.showFill = e.checked;
+        
+      } else if (s === "chkShowNormals") {
+        result.showNormals = e.checked;
+        
+      } else {
+        // Unrecognized checkbox
+        fault(func_name, 200);
+      }
     }
     
     // Return result
@@ -311,9 +617,8 @@ canvas {
    *
    * The parameter must be one of the following strings:
    *
-   *   "open" - screen requesting open file information
-   *   "loading" - file(s) loading screen
    *   "main" - the main application screen
+   *   "close" - the screen shown when the application is closed
    *
    * All other screen DIVs are hidden when the new DIV is displayed, so
    * there is only one DIV active at a time.
@@ -328,7 +633,7 @@ canvas {
   function showDiv(s) {
     
     var func_name = "showDiv";
-    var eSplash, eOpen, eLoading, eMain;
+    var eSplash, eMain, eClose;
     
     // Check parameter type
     if (typeof s !== "string") {
@@ -337,38 +642,94 @@ canvas {
     
     // Find all the DIV elements, plus the splash screen DIV
     eSplash = document.getElementById("divSplash");
-    eOpen = document.getElementById("divOpen");
-    eLoading = document.getElementById("divLoading");
     eMain = document.getElementById("divMain");
+    eClose = document.getElementById("divClose");
     
-    if ((eSplash == null) || (eOpen == null) ||
-        (eLoading == null) || (eMain == null)) {
+    if ((eSplash == null) || (eMain == null) || (eClose == null)) {
       fault(func_name, 200);
     }
     
     // Begin by hiding all DIVs
     eSplash.style.display = "none";
-    eOpen.style.display = "none";
-    eLoading.style.display = "none";
     eMain.style.display = "none";
+    eClose.style.display = "none";
     
     // Show the requested DIV and update the current screen state
-    if (s === "open") {
-      eOpen.style.display = "block";
-      m_screen = s;
-      
-    } else if (s === "loading") {
-      eLoading.style.display = "block";
-      m_screen = s;
-      
-    } else if (s === "main") {
+    if (s === "main") {
       eMain.style.display = "block";
+      m_screen = s;
+      
+    } else if (s === "close") {
+      eClose.style.display = "block";
       m_screen = s;
       
     } else {
       // Unrecognized DIV request
       fault(func_name, 300);
     }
+  }
+  
+  /*
+   * Function that is called from load_screen module if any part of
+   * loading fails.
+   *
+   * This function will show the closed DIV with the error field filled
+   * in with the given reason.  The reason should NOT be escaped with
+   * HTML entities -- this function will handle that.
+   *
+   * This function will finally send a POST request to "/shutdown" to
+   * indicate to the server that it may shut down.
+   *
+   * Parameters:
+   *
+   *   reason: string - a description of the load problem that will be
+   *   displayed to the user
+   */
+  function loadFailed(reason) {
+    
+    var func_name = "loadFailed";
+    var e;
+    var fd;
+    var request;
+    
+    // Check parameter
+    if (typeof reason !== "string") {
+      fault(func_name, 100);
+    }
+    
+    // Escape the string
+    reason = escapeString(reason);
+    
+    // Write the escaped reason into the closed screen and show the
+    // reason DIV
+    e = document.getElementById("spnCloseReason");
+    if (e == null) {
+      fault(func_name, 200);
+    }
+    e.innerHTML = reason;
+    
+    e = document.getElementById("divCloseError");
+    if (e == null) {
+      fault(func_name, 210);
+    }
+    e.style.display = "block";
+    
+    // Show the closed screen
+    showDiv("close");
+    
+    // We need to signal the HTTP server to close down, so first of all
+    // create dummy form data that we can POST to it -- the contents of
+    // the form data are ignored by the server
+    fd = new FormData();
+    fd.append("ignored", "irrelevant");
+    
+    // Send a POST request with our dummy data to "/shutdown" -- we
+    // don't care about the response, so we don't register any event
+    // handler for the request
+    request = new XMLHttpRequest();
+    request.open("POST", "/shutdown");
+    request.setRequestHeader("Content-Type", "multipart/form-data");
+    request.send(fd);
   }
   
   /*
@@ -380,6 +741,7 @@ canvas {
     
     var func_name = "handleLoad";
     var e;
+    var i;
     
     // Register the canvas with the main screen object
     e = document.getElementById("cnvMain");
@@ -389,18 +751,45 @@ canvas {
     
     main_screen.storeCanvas(e);
     
-    // Register open screen event handlers
-    e = document.getElementById("btnOpen");
+    // Add an event handler to resize box to automatically resize the
+    // canvas to match the resize box value
+    e = document.getElementById("optSize");
     if (e == null) {
       fault(func_name, 100);
     }
+    e.onchange = resizeChanged;
     
-    e.onclick = open_screen.handleOpen;
+    // Force an invocation of the resize event handler so that the
+    // canvas matches the current value of the size option box
+    resizeChanged();
     
-    // @@TODO: register event handlers
+    // Add event handlers to all the layer visibility checkboxes that
+    // invoke the redraw() method on the main screen (which is ignored
+    // if the main screen isn't visible)
+    for(i = 0; i < LAYER_CHECKS.length; i++) {
+      // Get the checkbox
+      e = document.getElementById(LAYER_CHECKS[i]);
+      if (e == null) {
+        fault(func_name, 200);
+      }
+      
+      // Add a change handler that invokes redraw
+      e.onchange = function(event) {
+        main_screen.redraw();
+      };
+    }
     
-    // Begin by showing the open screen with no error message
-    open_screen.show(false);
+    // Add the pointer down event handler to the main canvas; that
+    // handler will dynamically add motion and up event handlers when
+    // necessary
+    e = document.getElementById("cnvMain");
+    if (e == null) {
+      fault(func_name, 300);
+    }
+    e.onpointerdown = handlePointerDown;
+    
+    // Begin by loading the data files
+    load_screen.load();
   }
   
   /*
@@ -410,670 +799,15 @@ canvas {
    * All exports are declared within a global "lilac_mesh_html" object.
    */
   window.lilac_mesh_html = {
-    "openError": openError,
-    "getFiles": getFiles,
+    "getClickMode": getClickMode,
+    "getLayerVisibility": getLayerVisibility,
     "currentDiv": currentDiv,
     "showDiv": showDiv,
+    "loadFailed": loadFailed,
     "handleLoad": handleLoad
   };
   
 }());
-
-    </script>
-    <script>
-
-/*
- * Dependency check.
- */
-if (typeof LILAC_MESH_JS_INCLUDED === "undefined") {
-  console.log(
-    "lilac_mesh.html: lilac_mesh.js has not been included!");
-  throw "dependency";
-}
-
-/*
- * Constants controlling how overlay is displayed:
- *
- *   OVERLAY_LINE_WIDTH: width of the line
- *   OVERLAY_LINE_COLOR: CSS color string specifying color of line
- *   OVERLAY_UNSEL_COLOR: CSS color string for unselected points
- *   OVERLAY_SEL_COLOR: CSS color string for selected points
- *   OVERLAY_PT_WIDTH: the width of a point square
- */
-var OVERLAY_LINE_WIDTH = 2;
-var OVERLAY_LINE_COLOR = "blue";
-var OVERLAY_UNSEL_COLOR = "black";
-var OVERLAY_SEL_COLOR = "red";
-var OVERLAY_PT_WIDTH = 8;
-
-/*
- * Array of all the mode radio option button IDs.
- */
-var RADIO_MODES = [
-  "radAdd", "radSelSingle", "radSelMulti", "radUnSel", "radMove"
-];
-
-/*
- * An <img> element containing the trace image, or false if no trace
- * image is currently loaded.
- *
- * This <img> is the original trace image, without any kind of resizing
- * or transformation.
- */
-var m_trace_img = false;
-
-/*
- * An ImageData object containing the trace layer, or false if no trace
- * image is currently loaded.
- *
- * This is derived from m_trace_img and is specific to the size of the
- * canvas, so it needs to be recomputed whenever the canvas size is
- * changed.
- *
- * All pixels in this layer will be fully opaque, it will have the same
- * dimensions as the canvas, letterboxing with white will be used to
- * maintain the original source image aspect, and the image will be
- * faded as if it were 50% transparent over a white background.
- */
-var m_trace_layer = false;
-
-/*
- * The ID of the presentation DIV that is currently displayed.
- */
-var m_active_div = "divSplash";
-
-/*
- * Report an error to console and throw an exception for a fault
- * occurring within the scripts in this HTML source file.
- *
- * Parameters:
- *
- *   func_name : string - the name of the function in this module
- *
- *   loc : number(int) - the location within the function
- */
-function html_fault(func_name, loc) {
-  
-  // If parameters not valid, set to unknown:0
-  if ((typeof func_name !== "string") || (typeof loc !== "number")) {
-    func_name = "unknown";
-    loc = 0;
-  }
-  loc = Math.floor(loc);
-  if (!isFinite(loc)) {
-    loc = 0;
-  }
-  
-  // Report error to console
-  console.log("Fault at " + func_name + ":" + String(loc) +
-                " in lilac_mesh.html");
-  
-  // Throw exception
-  throw ("lilac_mesh.html:" + func_name + ":" + String(loc));
-}
-
-/*
- * Get the client X/Y coordinates of the main canvas.
- *
- * Return:
- *
- *   an array with two numbers, the first being the X coordinate and the
- *   the second being the Y coordinate
- */
-function main_canvas_root() {
-  
-  var func_name = "main_canvas_root";
-  var eCanvas;
-  var r;
-  var x;
-  var y;
-  
-  // Get the canvas element
-  eCanvas = document.getElementById("cnvMain");
-  if (eCanvas == null) {
-    html_fault(func_name, 100);
-  }
-  
-  // Get the bounding rectangle for the canvas
-  r = eCanvas.getBoundingClientRect();
-  
-  // Get the X and Y coordinates from the bounding rectangle
-  x = r.x;
-  y = r.y;
-  
-  // Adjust X and Y to skip over element border
-  x = x + eCanvas.clientLeft;
-  y = y + eCanvas.clientTop;
-  
-  // Return result
-  return [x, y];
-}
-
-/*
- * Based on the radio controls, determine what the click mode is.
- *
- * The return value is one of the following strings:
- *
- *   "add" - add points mode
- *   "sel_single" - select single point mode
- *   "sel_multi" - select multiple points mode
- *   "unsel" - unselect points mode
- *   "move" - move points mode
- *
- * Return:
- *
- *   string indicating the selected click mode
- */
-function click_mode() {
-  
-  var func_name = "click_mode";
-  var mode;
-  var i;
-  var e;
-  var s;
-  
-  // Determine which radio control is selected
-  mode = false;
-  for(i = 0; i < RADIO_MODES.length; i++) {
-    // Get current radio control
-    e = document.getElementById(RADIO_MODES[i]);
-    if (e == null) {
-      html_fault(func_name, 100);
-    }
-    
-    // Check whether selected
-    if (e.checked) {
-      // Check whether mode has already been set
-      if (mode === false) {
-        // Mode not already set, so set mode depending on which control
-        // this is
-        s = RADIO_MODES[i];
-        if (s === "radAdd") {
-          mode = "add";
-        } else if (s === "radSelSingle") {
-          mode = "sel_single";
-        } else if (s === "radSelMulti") {
-          mode = "sel_multi";
-        } else if (s === "radUnSel") {
-          mode = "unsel";
-        } else if (s === "radMove") {
-          mode = "move";
-        } else {
-          // Unrecognized radio control
-          html_fault(func_name, 200);
-        }
-        
-      } else {
-        // Mode already set, so error
-        html_fault(func_name, 300);
-      }
-    }
-  }
-  
-  // Make sure we got a mode
-  if (mode === false) {
-    html_fault(func_name, 400);
-  }
-  
-  // Return mode
-  return mode;
-}
-
-/*
- * Redraw the canvas according to current program state.
- */
-function canvas_redraw() {
-  
-  var func_name = "canvas_redraw";
-  var cv;
-  var rc;
-  var ob;
-  var i;
-  var r;
-  
-  // Get canvas and 2D rendering context
-  cv = document.getElementById("cnvMain");
-  if (cv == null) {
-    html_fault(func_name, 100);
-  }
-  
-  rc = cv.getContext("2d");
-  if (rc == null) {
-    html_fault(func_name, 150);
-  }
-  
-  // If we have a trace layer, put it on the canvas; else, blank the
-  // canvas to white
-  if (m_trace_layer !== false) {
-    // Trace layer -- put the layer
-    rc.putImageData(m_trace_layer, 0, 0);
-    
-  } else {
-    // No trace layer -- blank to white
-    rc.fillStyle = "white";
-    rc.fillRect(0, 0, cv.width, cv.height);
-  }
-  
-  // Get the overlay to draw
-  ob = get_overlay();
-  
-  // Draw all the lines
-  if (ob.lines.length > 0) {
-    rc.beginPath();
-    rc.lineCap = "round";
-    rc.lineWidth = OVERLAY_LINE_WIDTH;
-    rc.strokeStyle = OVERLAY_LINE_COLOR;
-    
-    for(i = 0; i < ob.lines.length; i++) {
-      r = ob.lines[i];
-      rc.moveTo(r[0] * cv.width, r[1] * cv.height);
-      rc.lineTo(r[2] * cv.width, r[3] * cv.height);
-    }
-    
-    rc.stroke();
-  }
-  
-  // Draw all unselected points
-  if (ob.pts.length > 0) {
-    rc.fillStyle = OVERLAY_UNSEL_COLOR;
-    for(i = 0; i < ob.pts.length; i++) {
-      r = ob.pts[i];
-      rc.fillRect(
-              (r[0] * cv.width) - (OVERLAY_PT_WIDTH / 2),
-              (r[1] * cv.height) - (OVERLAY_PT_WIDTH / 2),
-              OVERLAY_PT_WIDTH,
-              OVERLAY_PT_WIDTH);
-    }
-  }
-  
-  // Draw all selected points
-  if (ob.sels.length > 0) {
-    rc.fillStyle = OVERLAY_SEL_COLOR;
-    for(i = 0; i < ob.sels.length; i++) {
-      r = ob.sels[i];
-      rc.fillRect(
-              (r[0] * cv.width) - (OVERLAY_PT_WIDTH / 2),
-              (r[1] * cv.height) - (OVERLAY_PT_WIDTH / 2),
-              OVERLAY_PT_WIDTH,
-              OVERLAY_PT_WIDTH);
-    }
-  }
-}
-
-/*
- * Resize the canvas, if necessary, according to the value currently
- * selected in optSize.
- *
- * This interprets the value from optSize.  A fault occurs if any of the
- * values there don't follow the format "size320x240".  A fault also
- * occurs if the selected dimension width or height is not in the range
- * [TRACE_LAYER_MIN_DIM, TRACE_LAYER_MAX_DIM].
- *
- * The selected size must have exact 16:9 aspect ratio or a fault
- * occurs.  This is so that floating-point vector coordinates always
- * have the same meaning.
- */
-function canvas_resize() {
-  
-  var func_name = "canvas_resize";
-  var eOpt;
-  var eCanvas;
-  var sv;
-  var sza;
-  var i;
-  var j;
-  var c;
-  var new_width;
-  var new_height;
-  
-  // Get the size option control and the canvas
-  eOpt = document.getElementById("optSize");
-  eCanvas = document.getElementById("cnvMain");
-  
-  if ((eOpt == null) || (eCanvas == null)) {
-    html_fault(func_name, 100);
-  }
-  
-  // Get the string value of the option control
-  sv = eOpt.value;
-  
-  // String value must be at least seven characters to be valid
-  if (sv.length < 7) {
-    html_fault(func_name, 200);
-  }
-  
-  // First four characters must be "size"
-  if (sv.slice(0, 4) !== "size") {
-    html_fault(func_name, 300);
-  }
-  
-  // Drop the first four characters
-  sv = sv.slice(4);
-  
-  // Rest of the string value should be split around an "x" delimiter
-  sza = sv.split("x");
-  if (sza.length !== 2) {
-    html_fault(func_name, 400);
-  }
-  
-  // Both of the field elements should be at least one character
-  if ((sza[0].length < 1) || (sza[1].length < 1)) {
-    html_fault(func_name, 500);
-  }
-  
-  // Both field elements should only have decimal digits
-  for(j = 0; j < sza.length; j++) {
-    for(i = 0; i < sza[j].length; i++) {
-      c = sza[j].charCodeAt(i);
-      if ((c < 0x30) || (c > 0x39)) {
-        html_fault(func_name, 600);
-      }
-    }
-  }
-  
-  // We can now get the desired width and height
-  new_width = parseInt(sza[0], 10);
-  new_height = parseInt(sza[1], 10);
-  
-  if ((!isFinite(new_width)) || (!isFinite(new_height))) {
-    html_fault(func_name, 650);
-  }
-  
-  // Check range of dimensions
-  if ((new_width < TRACE_LAYER_MIN_DIM) ||
-      (new_width > TRACE_LAYER_MAX_DIM) ||
-      (new_height < TRACE_LAYER_MIN_DIM) ||
-      (new_height > TRACE_LAYER_MAX_DIM)) {
-    html_fault(func_name, 675);
-  }
-  
-  // Verify that dimensions exactly 16:9
-  if (((new_width * 9) / 16) !== new_height) {
-    html_fault(func_name, 680);
-  }
-  
-  // Ignore the call if new width and height same as current dimensions
-  if ((new_width === eCanvas.width) &&
-      (new_height === eCanvas.height)) {
-    return;
-  }
-  
-  // If we got here, resize the canvas, recompute the trace layer, and
-  // redraw the canvas
-  eCanvas.width = new_width;
-  eCanvas.height = new_height;
-  
-  if (m_trace_img !== false) {
-    m_trace_layer = derive_trace_layer(
-                      m_trace_img, new_width, new_height);
-  }
-  canvas_redraw();
-}
-
-/*
- * Update the trace image according to the file loaded (if any) in the
- * trace file upload control.
- */
-function update_trace() {
-  
-  var func_name = "update_trace";
-  var e;
-  var eCanvas;
-  var f;
-  var reader;
-  
-  // First thing is to check whether any image is currently loaded -- if
-  // it is, then release it and the tracing layer and redraw
-  if ((m_trace_img !== false) || (m_trace_layer !== false)) {
-    m_trace_img = false;
-    m_trace_layer = false;
-    canvas_redraw();
-  }
-  
-  // Next, get the trace file that was selected in the control, or false
-  // if nothing selected
-  e = document.getElementById("fTrace");
-  if (e == null) {
-    html_fault(func_name, 100);
-  }
-  
-  f = false;
-  if (e.files.length > 0) {
-    f = e.files[0];
-  }
-  
-  // If nothing selected, do nothing further
-  if (f === false) {
-    return;
-  }
-  
-  // Get a reference to the canvas object, so we will be able to get its
-  // dimensions
-  eCanvas = document.getElementById("cnvMain");
-  if (eCanvas == null) {
-    html_fault(func_name, 150);
-  }
-  
-  // Asynchronously read the whole file into a data:// URL that directly
-  // encodes the file data in base-64
-  reader = new FileReader();
-  reader.onerror = function() {
-    // Something went wrong reading the file
-    alert("Error while reading trace file!");
-  };
-  reader.onload = function() {
-    // Successfully read trace file
-    var durl;
-    var im;
-    
-    // Get the full data URL
-    durl = reader.result;
-    
-    // Create a new <img> element and set its source to the data URL so
-    // that it loads the image; when image loads, set the trace image
-    // object and redraw
-    im = document.createElement("img");
-    im.onerror = function() {
-      // Failed to load image
-      alert("Error loading image file!");
-    };
-    im.onload = function() {
-      // Check that natural dimensions are at least the minimum
-      if ((im.naturalWidth < TRACE_IMAGE_MIN_DIM) ||
-          (im.naturalHeight < TRACE_IMAGE_MIN_DIM)) {
-        alert("Image file dimensions too small!");
-      }
-      
-      // Update the trace <img>, derive the trace layer, and redraw
-      m_trace_img = im;
-      m_trace_layer = derive_trace_layer(
-                        im, eCanvas.width, eCanvas.height);
-      canvas_redraw();
-    };
-    im.src = durl;
-  };
-  reader.readAsDataURL(f);
-}
-
-// @@TODO:
-function handle_main_mouse_down_add(x, y) {
-  // @@TODO:
-  console.log("handle_main_mouse_down_add " + x + " " + y);
-}
-
-// @@TODO:
-function handle_main_mouse_down_single(x, y) {
-  // @@TODO:
-  console.log("handle_main_mouse_down_single " + x + " " + y);
-}
-
-// @@TODO:
-function handle_main_mouse_drag_multi(x, y) {
-  // @@TODO:
-  console.log("handle_main_mouse_drag_multi " + x + " " + y);
-}
-
-// @@TODO:
-function handle_main_mouse_drag_unsel(x, y) {
-  // @@TODO:
-  console.log("handle_main_mouse_drag_unsel " + x + " " + y);
-}
-
-// @@TODO:
-function handle_main_mouse_down_move(x, y) {
-  // @@TODO:
-  console.log("handle_main_mouse_down_move " + x + " " + y);
-}
-
-// @@TODO:
-function handle_main_mouse_drag_move(x, y) {
-  // @@TODO:
-  console.log("handle_main_mouse_drag_move " + x + " " + y);
-}
-
-// @@TODO:
-function handle_main_mouse_up_move() {
-  // @@TODO:
-  console.log("handle_main_mouse_up_move");
-}
-
-// @@TODO:
-function handle_open_files() {
-  // @@TODO:
-}
-
-/*
- * Handler to run when the document loads.
- *
- * @@TODO: old code below
- */
-function old_load() {
-  
-  var func_name = "window.onload";
-  var e;
-  var eOpen;
-  
-  // Add an event handler to resize box to automatically resize and
-  // redraw the canvas to match the resize box value
-  e = document.getElementById("optSize");
-  if (e == null) {
-    html_fault(func_name, 100);
-  }
-  e.onchange = function() {
-    canvas_resize();
-  };
-  
-  // Attach mouse handlers to the main canvas that call through to the
-  // appropriate handler methods
-  e = document.getElementById("cnvMain");
-  if (e == null) {
-    html_fault(func_name, 300);
-  }
-  e.onmousedown = function(mv) {
-    
-    var cm;
-    var p;
-    
-    // Mouse pressed down -- first, filter out the event if for a mouse
-    // button other than main
-    if (mv.button !== 0) {
-      return;
-    }
-    
-    // Main button is down, so get click mode and handle based on mode
-    cm = click_mode();
-    p = main_canvas_root();
-    if (cm === "add") {
-      handle_main_mouse_down_add(
-        mv.clientX - p[0], mv.clientY - p[1]);
-      
-    } else if (cm === "sel_single") {
-      handle_main_mouse_down_single(
-        mv.clientX - p[0], mv.clientY - p[1]);
-      
-    } else if (cm === "sel_multi") {
-      handle_main_mouse_drag_multi(
-        mv.clientX - p[0], mv.clientY - p[1]);
-      
-    } else if (cm === "unsel") {
-      handle_main_mouse_drag_unsel(
-        mv.clientX - p[0], mv.clientY - p[1]);
-      
-    } else if (cm === "move") {
-      handle_main_mouse_down_move(
-        mv.clientX - p[0], mv.clientY - p[1]);
-      
-    } else {
-      html_fault(func_name, 400);
-    }
-    
-  };
-  e.onmouseup = function(mv) {
-    
-    // Mouse button released -- first, filter out the event unless the
-    // main button is now off
-    if ((mv.buttons & 0x1) !== 0) {
-      return;
-    }
-    
-    // We only care about mouse up during move mode, so only call a
-    // handler in that case
-    if (click_mode() === "move") {
-      handle_main_mouse_up_move();
-    }
-    
-  };
-  e.onmousemove = function(mv) {
-    
-    var cm;
-    var p;
-    
-    // Mouse moved -- first, check whether the main mouse button is down
-    if ((mv.buttons & 0x1) !== 0) {
-      // Main mouse button is down, so get click mode and handle based
-      // on mode
-      cm = click_mode();
-      p = main_canvas_root();
-      if (cm === "add") {
-        // Nothing required here
-        
-      } else if (cm === "sel_single") {
-        // Nothing required here
-        
-      } else if (cm === "sel_multi") {
-        handle_main_mouse_drag_multi(
-          mv.clientX - p[0], mv.clientY - p[1]);
-        
-      } else if (cm === "unsel") {
-        handle_main_mouse_drag_unsel(
-          mv.clientX - p[0], mv.clientY - p[1]);
-        
-      } else if (cm === "move") {
-        handle_main_mouse_drag_move(
-          mv.clientX - p[0], mv.clientY - p[1]);
-        
-      } else {
-        html_fault(func_name, 500);
-      }
-      
-    } else {
-      // Main mouse button is up, so we only have to do something in
-      // move mode, where we call the up handler
-      if (click_mode() === "move") {
-        handle_main_mouse_up_move();
-      }
-    }
-  };
-  
-  // Attach event handler to the open files button
-  e = document.getElementById("btnOpen");
-  if (e == null) {
-    html_fault(func_name, 600);
-  }
-  e.onclick = function() {
-    handle_open_files();
-  };
-}
 
 // Register the document loading event
 window.onload = lilac_mesh_html.handleLoad;
@@ -1082,61 +816,18 @@ window.onload = lilac_mesh_html.handleLoad;
   </head>
   <body>
 
+    <!-- Screen displayed when JavaScript is disabled -->
     <noscript>
       <h1>Lilac Mesh Editor</h1>
       <p>This web app requires JavaScript to function!</p>
     </noscript>
 
+    <!-- Initial splash screen, except when JavaScript disabled -->
     <div id="divSplash">
       Loading web app...
     </div>
 
-    <div id="divOpen">
-      <h1>Lilac Mesh Editor</h1>
-      
-      <div id="divOpenWarn">
-        You must choose a trace image to load!
-      </div>
-      
-      <div id="divTraceError">
-        Failed to load the trace image!
-      </div>
-      
-      <div id="divMeshLoadError">
-        Failed to load the mesh file!
-      </div>
-      
-      <div id="divTrace">
-        Choose a trace image:<br/>
-        <input
-          type="file"
-          id="fTrace"
-          name="fTrace"
-          accept="image/*"/>
-      </div>
-      
-      <div id="divSource">
-        Choose a mesh file to load, or leave blank:<br/>
-        <input
-          type="file"
-          id="fSource"
-          name="fSource"
-          accept=".txt,.json,text/plain,application/json"/>
-      </div>
-      
-      <div id="divOpenBtn">
-        <input type="button" value="Open file(s)" id="btnOpen"/>
-      </div>
-    </div>
-    
-    <div id="divLoading">
-      <h1>Lilac Mesh Editor</h1>
-      
-      <div id="divLoadingActive">
-        Loading, please wait...
-      </div>
-    </div>
-
+    <!-- The main program window, shown after data files loaded -->
     <div id="divMain">
       <canvas width="320" height="240" id="cnvMain">
         HTML5 canvas support is required!
@@ -1185,12 +876,46 @@ window.onload = lilac_mesh_html.handleLoad;
       <div id="divSizer">
         Canvas size:
         <select id="optSize" name="optSize">
+          <!-- The format of the value fields is important -->
           <option value="size320x180" selected>320 x 180</option>
           <option value="size640x360">640 x 360</option>
           <option value="size800x450">800 x 450</option>
           <option value="size1024x576">1024 x 576</option>
           <option value="size1280x720">1280 x 720</option>
         </select>
+      </div>
+      <div id="divLayerOptions">
+        <input
+          type="checkbox"
+          id="chkShowTrace"
+          name="chkShowTrace"
+          checked />
+        Show trace image
+        
+        <br/>
+        <input
+          type="checkbox"
+          id="chkShowFill"
+          name="chkShowFill"/>
+        Show filled triangles
+        
+        <br/>
+        <input
+          type="checkbox"
+          id="chkShowNormals"
+          name="chkShowNormals"/>
+        Show normals
+      </div>
+    </div>
+    
+    <!-- Window shown when the application is closed -->
+    <div id="divClose">
+      <p>Web application is closed.</p>
+      
+      <!-- The error reason is not displayed by default -->
+      <div id="divCloseError">
+        Closure was due to error:<br/>
+        <span id="spnCloseReason">&nbsp;</span>
       </div>
     </div>
   </body>
