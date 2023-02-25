@@ -1,12 +1,10 @@
-# Lilac Mesh Format
+# Lilac Mesh JSON Format
 
-A Lilac mesh is a two-dimensional triangle mesh that is intended to add three-dimensional normal data to an existing two-dimensional image.
-
-Lilac meshes are stored in [\[JSON\]][json] text files with a specific JSON structure.
+The standard Lilac mesh format is a Shastina dialect that is documented in the main Lilac project.  However, it is easier for the JavaScript mesh editor client to handle JSON than Shastina, so the mesh editor handles Lilac meshes in a JSON format documented in this file.  The special HTTP editor documented in `server.md` will transparently convert between the Shastina format and the JSON format so that the Shastina format is always used on disk but the JavaScript client reads and writes the JSON format.
 
 ## 1. Top-level structure
 
-The top-level entity in a Lilac mesh file must be a JSON object that has at least the following two properties:
+The top-level entity in a Lilac JSON mesh must be a [\[JSON\]][json] object that has at least the following two properties:
 
 * `points` &mdash; an array of zero or more point objects
 * `tris` &mdash; an array of zero or more triangle arrays
