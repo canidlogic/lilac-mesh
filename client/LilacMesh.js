@@ -981,4 +981,218 @@ LilacMesh.prototype.toLines = function() {
   
   // Return result
   return result;
+};
+
+/*
+ * Generate a list of all the triangle coordinates in this mesh.
+ * 
+ * The return value is an array of triangles, each triangle being an
+ * array of six numbers in [x1, y1, x2, y2, x3, y3] order.  Each
+ * coordinate is in normalized image space [0.0, 1.0].
+ * 
+ * IMPORTANT:  note that the orientation of the Y axis is such that the
+ * origin is in the BOTTOM-left corner.
+ * 
+ * Return:
+ * 
+ *   a list of triangles
+ */
+LilacMesh.prototype.toTris = function() {
+  
+  var func_name = "toTris";
+  var tl, t, v, p;
+  var i, j;
+  
+  // Build the list of triangles
+  tl = [];
+  for(i = 0; i < this._tris.length; i++) {
+    // Get a reference to the current triangle
+    t = this._tris[i];
+    
+    // Build the coordinates
+    v = [];
+    for(j = 0; j < t.length; j++) {
+      // Get index of current point
+      p = LilacMesh._seekPoint(this._points, t[j]);
+      if (p === false) {
+        LilacMesh._fault(func_name, 100);
+      }
+      
+      // Get point object
+      p = this._points[p];
+      
+      // Add coordinates to triangle
+      v.push(p.x);
+      v.push(p.y);
+    }
+    
+    // Add the triangle to the list
+    tl.push(v);
+  }
+  
+  // Return the triangle list
+  return tl;
+};
+
+/*
+ * Generate a list of all normals in this mesh.
+ * 
+ * The return value is an array of normals, each normal being an array
+ * of four numbers in [x, y, dx, dy] order.  (dx, dy) is the
+ * displacement from (x, y) origin, using a unit circle.  The length of
+ * this displacement should be multiplied by the display length of a
+ * normal to get the second coordinate when displaying.  X and Y
+ * coordinates are in normalized image space [0.0, 1.0].
+ * 
+ * IMPORTANT:  note that the orientation of the Y axis is such that the
+ * origin is in the BOTTOM-left corner.
+ * 
+ * Return:
+ * 
+ *   a list of normals
+ */
+LilacMesh.prototype.toNormals = function() {
+  
+  var func_name = "toNormals";
+  var nl, p;
+  var i;
+  var dx, dy;
+  
+  // Build the normal list
+  nl = [];
+  for(i = 0; i < this._points.length; i++) {
+    // Get reference to current point
+    p = this._points[i];
+    
+    // Use norma to get (dx, dy) in the proper angle around the unit
+    // circle
+    dx = Math.cos(p.norma * 2 * Math.PI);
+    dy = Math.sin(p.norma * 2 * Math.PI);
+    
+    // Scale both by normd to get the full displacement
+    dx = dx * p.normd;
+    dy = dy * p.normd;
+    
+    // Verify that result is finite
+    if ((!isFinite(dx)) || (!isFinite(dy))) {
+      LilacMesh._fault(func_name, 100);
+    }
+    
+    // Add the normal to the list
+    nl.push([p.x, p.y, dx, dy]);
+  }
+  
+  // Return the normal list
+  return nl;
+};
+
+/*
+ * Generate a filtered list of vertex points.
+ * 
+ * filter is either false to generate a list of all points, or a
+ * reference to a function that takes a single integer parameter and
+ * returns a boolean value.
+ * 
+ * If filter is false, then the filtered list returned will include all
+ * points.  Otherwise, for each point, the provided callback function
+ * will be called with the point UID, and the callback function will
+ * return true if the point should be included and false if the point
+ * should not be included.
+ * 
+ * The return value is an array of point coordinates, where each point
+ * coordinate is an array of two normalized coordinates in range from
+ * 0.0 to 1.0, where the coordinates are ordered [x, y].
+ * 
+ * IMPORTANT:  note that the orientation of the Y axis is such that the
+ * origin is in the BOTTOM-left corner.
+ * 
+ * Parameters:
+ * 
+ *   filter : (function(number(int)) : boolean) | false - a callback
+ *   function that is used to filter which points are included in the
+ *   list, or false to include all points
+ * 
+ * Return:
+ * 
+ *   an array of point coordinate pair arrays
+ */
+LilacMesh.prototype.filterVertex = function(filter) {
+  
+  var func_name = "filterVertex";
+  var pl, p;
+  var i;
+  
+  // Check parameter
+  if (filter !== false) {
+    if (typeof filter !== "function") {
+      LilacMesh._fault(func_name, 100);
+    }
+  }
+  
+  // Build the filtered point list
+  pl = [];
+  for(i = 0; i < this._points.length; i++) {
+    // Get reference to current point
+    p = this._points[i];
+    
+    // If there is a filter function, skip this point if it is filtered
+    // out
+    if (filter !== false) {
+      if (!filter(p.uid)) {
+        continue;
+      }
+    }
+    
+    // Add this point to the filtered point list
+    pl.push([p.x, p.y]);
+  }
+  
+  // Return the filtered point list
+  return pl;
+};
+
+/*
+ * Given a point UID, return a copy of its coordinates.
+ * 
+ * The return value is an array with two normalized coordinates in range
+ * [0.0, 1.0], given in order [x, y].
+ * 
+ * IMPORTANT:  note that the orientation of the Y axis is such that the
+ * origin is in the BOTTOM-left corner.
+ * 
+ * A fault occurs if the given UID does not match any of the points in
+ * the mesh.
+ * 
+ * Parameters:
+ * 
+ *   uid : number(int) - the UID of the point to retrieve
+ * 
+ * Return:
+ * 
+ *   an array of two normalized (x,y) coordinates for the point
+ */
+LilacMesh.prototype.getPoint = function(uid) {
+  
+  var func_name = "getPoint";
+  var p;
+  
+  // Check parameter
+  if (typeof uid !== "number") {
+    LilacMesh._fault(func_name, 100);
+  }
+  if ((!isFinite(uid)) || (uid !== Math.floor(uid))) {
+    LilacMesh._fault(func_name, 110);
+  }
+  
+  // Find the point
+  p = LilacMesh._seekPoint(this._points, uid);
+  if (p === false) {
+    LilacMesh._fault(func_name, 200);
+  }
+  
+  // Get the point
+  p = this._points[p];
+  
+  // Retrieve the coordinates
+  return [p.x, p.y];
 }
