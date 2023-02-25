@@ -1,6 +1,6 @@
 # Lilac Mesh JSON Format
 
-The standard Lilac mesh format is a Shastina dialect that is documented in the main Lilac project.  However, it is easier for the JavaScript mesh editor client to handle JSON than Shastina, so the mesh editor handles Lilac meshes in a JSON format documented in this file.  The special HTTP editor documented in `server.md` will transparently convert between the Shastina format and the JSON format so that the Shastina format is always used on disk but the JavaScript client reads and writes the JSON format.
+The standard Lilac mesh format is a Shastina dialect that is documented in `MeshFormat.md`.  However, it is easier for the JavaScript mesh editor client to handle JSON than Shastina, so the mesh editor handles Lilac meshes in a JSON format documented in this file.  The special HTTP editor documented in `server.md` will transparently convert between the Shastina format and the JSON format so that the Shastina format is always used on disk but the JavaScript client reads and writes the JSON format.
 
 ## 1. Top-level structure
 
