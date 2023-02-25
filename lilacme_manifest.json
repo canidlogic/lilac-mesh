@@ -4,10 +4,8 @@
     "files": {
       "CanvasView": "client/CanvasView.js",
       "LilacMesh": "client/LilacMesh.js",
-      "lilac_mesh": "client/lilac_mesh.js",
       "load_screen": "client/load_screen.js",
-      "main_screen": "client/main_screen.js",
-      "open_screen": "client/open_screen.js"
+      "main_screen": "client/main_screen.js"
     }
   },
   ".": {
