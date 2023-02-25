@@ -32,10 +32,25 @@ h1 {
   font-family: sans-serif;
 }
 
-canvas {
+#cnvMain {
  border: medium inset;
  cursor: crosshair;
  padding: 0;
+}
+
+#divZoom {
+  margin-top: 1em;
+}
+
+#divNormal {
+  margin-top: 1em;
+  display: none;
+}
+
+#cnvNormal {
+  border: thin solid;
+  cursor: crosshair;
+  padding: 0;
 }
 
 #divMode {
@@ -50,20 +65,36 @@ canvas {
   margin-top: 1em;
 }
 
+#divFile {
+  margin-top: 1em;
+}
+
 #divSplash {
   font-style: italic;
 }
 
 #divMain {
-  display: None;
+  display: none;
+}
+
+#divSaving {
+  display: none;
+}
+
+#divSaveFailed {
+  display: none;
+}
+
+#divConfirm {
+  display: none;
 }
 
 #divClose {
-  display: None;
+  display: none;
 }
 
 #divCloseError {
-  display: None;
+  display: none;
 }
 
     </style>
@@ -103,7 +134,8 @@ canvas {
    * Array of all the mode radio option button IDs.
    */
   var RADIO_MODES = [
-    "radAdd", "radSelSingle", "radSelMulti", "radUnSel", "radMove"
+    "radHand", "radMove", "radIndependent", "radPivot",
+    "radExtend", "radFill", "radDrop", "radNormal"
   ];
   
   /*
@@ -240,6 +272,43 @@ canvas {
   }
   
   /*
+   * Get the client X/Y coordinates of the scope canvas.
+   *
+   * Return:
+   *
+   *   an array with two numbers, the first being the X coordinate and
+   *   the second being the Y coordinate
+   */
+  function scope_canvas_root() {
+    
+    var func_name = "scope_canvas_root";
+    var eCanvas;
+    var r;
+    var x;
+    var y;
+    
+    // Get the canvas element
+    eCanvas = document.getElementById("cnvNormal");
+    if (eCanvas == null) {
+      fault(func_name, 100);
+    }
+    
+    // Get the bounding rectangle for the canvas
+    r = eCanvas.getBoundingClientRect();
+    
+    // Get the X and Y coordinates from the bounding rectangle
+    x = r.x;
+    y = r.y;
+    
+    // Adjust X and Y to skip over element border
+    x = x + eCanvas.clientLeft;
+    y = y + eCanvas.clientTop;
+    
+    // Return result
+    return [x, y];
+  }
+  
+  /*
    * Event handler for handling changes to the canvas size option box.
    *
    * IMPORTANT:  You must register the canvas element with the module
@@ -329,6 +398,62 @@ canvas {
   }
   
   /*
+   * Event handler for when the pointer is pressed down on the normal
+   * adjustment canvas.
+   *
+   * Note that this will call preventDefault() on the event so that
+   * mouse events will not be fired.
+   *
+   * Event is ignored if main div is not displayed
+   *
+   * Parameters:
+   *
+   *   event : PointerEvent - the event data
+   */
+  function handleNormalDown(event) {
+    
+    var func_name = "handleNormalDown";
+    var cx, cy, cr;
+    var eCanvas;
+    
+    // Ignore if not showing main
+    if (m_screen !== "main") {
+      return;
+    }
+    
+    // Check parameter
+    if ((typeof event !== "object") ||
+          (!(event instanceof PointerEvent))) {
+      fault(func_name, 100);
+    }
+    
+    // Get the canvas (x,y) coordinate
+    cr = scope_canvas_root();
+    cx = event.clientX - cr[0];
+    cy = event.clientY - cr[1];
+    
+    // Call into the main screen event handler
+    main_screen.handlePointerNormal(cx, cy);
+      
+    // Capture the pointer and register event handlers -- first get the
+    // canvas element
+    eCanvas = document.getElementById("cnvNormal");
+    if (eCanvas == null) {
+      fault(func_name, 200);
+    }
+    
+    // Register event handlers
+    eCanvas.onpointermove = handleNormalMove;
+    eCanvas.onpointerup = handleNormalUp;
+    
+    // Capture the pointer
+    eCanvas.setPointerCapture(event.pointerId);
+    
+    // Cancel mouse events since we already handled pointer
+    event.preventDefault();
+  }
+  
+  /*
    * Event handler for when the pointer is pressed down on the main
    * canvas.
    *
@@ -387,6 +512,44 @@ canvas {
   }
   
   /*
+   * Event handler for when the pointer moves on the normal adjustment
+   * scope canvas and it is captured.
+   *
+   * This should NOT be registered in the main event handler
+   * registration code.  This is registered as needed by
+   * handleNormalDown().
+   *
+   * Note that this will call preventDefault() on the event so that
+   * mouse events will not be fired.
+   *
+   * Parameters:
+   *
+   *   event : PointerEvent - the event data
+   */
+  function handleNormalMove(event) {
+    
+    var func_name = "handleNormalMove";
+    var cx, cy, cr;
+    
+    // Check parameter
+    if ((typeof event !== "object") ||
+          (!(event instanceof PointerEvent))) {
+      fault(func_name, 100);
+    }
+    
+    // Get the canvas (x,y) coordinate
+    cr = scope_canvas_root();
+    cx = event.clientX - cr[0];
+    cy = event.clientY - cr[1];
+    
+    // Call into the main screen event handler
+    main_screen.handlePointerNormal(cx, cy);
+    
+    // Cancel mouse events since we already handled pointer
+    event.preventDefault();
+  }
+  
+  /*
    * Event handler for when the pointer moves on the main canvas and it
    * is captured.
    *
@@ -419,6 +582,47 @@ canvas {
     
     // Call into the main screen event handler
     main_screen.handlePointerDrag(cx, cy);
+    
+    // Cancel mouse events since we already handled pointer
+    event.preventDefault();
+  }
+  
+  /*
+   * Event handler for when the pointer is released on the normal
+   * adjustment scope canvas and it is captured.
+   *
+   * This should NOT be registered in the main event handler
+   * registration code.  This is registered as needed by
+   * handleNormalDown().
+   *
+   * Note that this will call preventDefault() on the event so that
+   * mouse events will not be fired.
+   *
+   * Parameters:
+   *
+   *   event : PointerEvent - the event data
+   */
+  function handleNormalUp(event) {
+    
+    var func_name = "handleNormalUp";
+    var eCanvas;
+    
+    // Check parameter
+    if ((typeof event !== "object") ||
+          (!(event instanceof PointerEvent))) {
+      fault(func_name, 100);
+    }
+    
+    // Get the canvas element
+    eCanvas = document.getElementById("cnvNormal");
+    if (eCanvas == null) {
+      fault(func_name, 200);
+    }
+    
+    // Release pointer capture and unregister move and up handlers
+    eCanvas.onpointermove = null;
+    eCanvas.onpointerup = null;
+    eCanvas.releasePointerCapture(event.pointerId);
     
     // Cancel mouse events since we already handled pointer
     event.preventDefault();
@@ -469,20 +673,225 @@ canvas {
   }
   
   /*
+   * Update the display status of the normal adjustment tool canvas.
+   *
+   * Parameters:
+   *
+   *   visible : boolean - true to show the normal adjustment tool
+   *   canvas, false to hide it
+   */
+  function showNormalTool(visible) {
+    
+    var func_name = "showNormalTool";
+    var e;
+    
+    // Check parameter
+    if (typeof visible !== "boolean") {
+      fault(func_name, 100);
+    }
+    
+    // Get the normal canvas DIV
+    e = document.getElementById("divNormal");
+    if (e == null) {
+      fault(func_name, 200);
+    }
+    
+    // Update the display appropriately
+    if (visible) {
+      e.style.display = "block";
+    } else {
+      e.style.display = "none";
+    }
+  }
+  
+  /*
+   * Function that shows the normal close screen without any error
+   * message and closes the HTTP server.
+   *
+   * This function will send a POST request to "/shutdown" to indicate
+   * to the server that it may shut down.
+   */
+  function doQuit() {
+    
+    var func_name = "doQuit";
+    var e;
+    var fd;
+    var request;
+    
+    // Hide the reason DIV
+    e = document.getElementById("divCloseError");
+    if (e == null) {
+      fault(func_name, 210);
+    }
+    e.style.display = "none";
+    
+    // Show the closed screen
+    showDiv("close");
+    
+    // We need to signal the HTTP server to close down, so first of all
+    // create dummy form data that we can POST to it -- the contents of
+    // the form data are ignored by the server
+    fd = new FormData();
+    fd.append("ignored", "irrelevant");
+    
+    // Send a POST request with our dummy data to "/shutdown" -- we
+    // don't care about the response, so we don't register any event
+    // handler for the request
+    request = new XMLHttpRequest();
+    request.open("POST", "/shutdown");
+    request.setRequestHeader("Content-Type", "multipart/form-data");
+    request.send(fd);
+  }
+  
+  /*
+   * Function called when a request is made to save the mesh file.
+   */
+  function handleSave() {
+    
+    var func_name = "handleSave";
+    var eError;
+    var mj;
+    var request;
+    
+    // First of all, hide the save error portion of the saving screen
+    eError = document.getElementById("divSaveFailed");
+    if (eError == null) {
+      fault(func_name, 100);
+    }
+    eError.style.display = "none";
+    
+    // Show the saving screen to prevent changes to mesh
+    showDiv("saving");
+    
+    // Serialize the current mesh state as a JSON string
+    mj = main_screen.serialize();
+    
+    // We need to send a PUT request to the server on "/mesh.json" that
+    // uploads this serialized JSON string to the file -- begin by
+    // setting up the request
+    request = new XMLHttpRequest();
+    request.open("PUT", "/mesh.json");
+    request.setRequestHeader("Content-Type", "application/json");
+    
+    // The function will continue within the asynchronous handler for
+    // the request
+    request.onreadystatechange = function() {
+      
+      var result;
+      var m;
+      
+      // Ignore the event if the process isn't complete
+      if (request.readyState !== 4) {
+        return;
+      }
+      
+      // If the request wasn't successful, then show the save error
+      // portion of the save screen and do nothing further
+      if (request.status !== 200) {
+        eError.style.display = "block";
+        return;
+      }
+      
+      // If we got here, we successfully uploaded the file, so we can
+      // clear the dirty flag on the mesh and return to the main screen
+      main_screen.cleanse();
+      showDiv("main");
+    };
+    
+    // Asynchronously upload the serialized JSON
+    request.send(mj);
+  }
+  
+  /*
    * Public functions
    * ================
    */
+  
+  /*
+   * Update the cursor property on the main canvas to match the current
+   * tool mode.
+   */
+  function updateCursor() {
+    
+    var func_name = "updateCursor";
+    var m;
+    var eCanvas;
+    
+    // Get the canvas element
+    eCanvas = document.getElementById("cnvMain");
+    if (eCanvas == null) {
+      fault(func_name, 100);
+    }
+    
+    // Update based on current mode
+    m = getClickMode();
+    if (m === "hand") {
+      eCanvas.style.cursor = "grab";
+      
+    } else if (m === "move") {
+      eCanvas.style.cursor = "move";
+      
+    } else {
+      // In default case, set to crosshair
+      eCanvas.style.cursor = "crosshair";
+    }
+  }
+  
+  /*
+   * Update the cursor property on the main canvas to use the actively
+   * grabbing icon.
+   *
+   * Once you are done, use updateCursor() to restore the proper state
+   * before the grab.
+   */
+  function grabbingCursor() {
+    
+    var func_name = "grabbingCursor";
+    var eCanvas;
+    
+    // Get the canvas element
+    eCanvas = document.getElementById("cnvMain");
+    if (eCanvas == null) {
+      fault(func_name, 100);
+    }
+    
+    // Update cursor
+    eCanvas.style.cursor = "grabbing";
+  }
+  
+  /*
+   * Update the cursor property on the main canvas to hide the cursor.
+   *
+   * Once you are done, use updateCursor() to restore the proper state
+   * before hiding the cursor.
+   */
+  function hideCursor() {
+    
+    var func_name = "hideCursor";
+    var eCanvas;
+    
+    // Get the canvas element
+    eCanvas = document.getElementById("cnvMain");
+    if (eCanvas == null) {
+      fault(func_name, 100);
+    }
+    
+    // Update cursor
+    eCanvas.style.cursor = "none";
+  }
   
   /*
    * Based on the radio controls, determine what the click mode is.
    *
    * The return value is one of the following strings:
    *
-   *   "add" - add points mode
-   *   "sel_single" - select single point mode
-   *   "sel_multi" - select multiple points mode
-   *   "unsel" - unselect points mode
-   *   "move" - move points mode
+   *   "hand" - hand tool
+   *   "move" - move point tool
+   *   "independent" - independent triangle tool
+   *   "pivot" - pivot triangle tool
+   *   "extend" - extend triangle tool
+   *   "fill" - fill triangle tool
+   *   "normal" - normal adjustment tool
    *
    * Return:
    *
@@ -512,16 +921,30 @@ canvas {
           // Mode not already set, so set mode depending on which
           // control this is
           s = RADIO_MODES[i];
-          if (s === "radAdd") {
-            mode = "add";
-          } else if (s === "radSelSingle") {
-            mode = "sel_single";
-          } else if (s === "radSelMulti") {
-            mode = "sel_multi";
-          } else if (s === "radUnSel") {
-            mode = "unsel";
+          if (s === "radHand") {
+            mode = "hand";
+          
           } else if (s === "radMove") {
             mode = "move";
+          
+          } else if (s === "radIndependent") {
+            mode = "independent";
+            
+          } else if (s === "radPivot") {
+            mode = "pivot";
+            
+          } else if (s === "radExtend") {
+            mode = "extend";
+            
+          } else if (s === "radFill") {
+            mode = "fill";
+            
+          } else if (s === "radDrop") {
+            mode = "drop";
+            
+          } else if (s === "radNormal") {
+            mode = "normal";
+          
           } else {
             // Unrecognized radio control
             fault(func_name, 200);
@@ -618,6 +1041,8 @@ canvas {
    * The parameter must be one of the following strings:
    *
    *   "main" - the main application screen
+   *   "saving" - screen shown when save operation in progress
+   *   "confirm" - the screen to confirm quit when unsaved changes
    *   "close" - the screen shown when the application is closed
    *
    * All other screen DIVs are hidden when the new DIV is displayed, so
@@ -626,6 +1051,10 @@ canvas {
    * Initially, a special "splash" DIV is shown that can't be selected
    * by this function.
    *
+   * Note that showing the "close" screen does NOT inform the HTTP
+   * server to shut down.  Use loadFailed() or doQuit() instead of
+   * calling this function directly.
+   *
    * Parameters:
    *
    *   s : string - the screen to show
@@ -633,7 +1062,7 @@ canvas {
   function showDiv(s) {
     
     var func_name = "showDiv";
-    var eSplash, eMain, eClose;
+    var eSplash, eMain, eSaving, eConfirm, eClose;
     
     // Check parameter type
     if (typeof s !== "string") {
@@ -643,20 +1072,33 @@ canvas {
     // Find all the DIV elements, plus the splash screen DIV
     eSplash = document.getElementById("divSplash");
     eMain = document.getElementById("divMain");
+    eSaving = document.getElementById("divSaving");
+    eConfirm = document.getElementById("divConfirm");
     eClose = document.getElementById("divClose");
     
-    if ((eSplash == null) || (eMain == null) || (eClose == null)) {
+    if ((eSplash == null) || (eMain == null) || (eSaving == null) ||
+        (eConfirm == null) || (eClose == null)) {
       fault(func_name, 200);
     }
     
     // Begin by hiding all DIVs
     eSplash.style.display = "none";
     eMain.style.display = "none";
+    eSaving.style.display = "none";
+    eConfirm.style.display = "none";
     eClose.style.display = "none";
     
     // Show the requested DIV and update the current screen state
     if (s === "main") {
       eMain.style.display = "block";
+      m_screen = s;
+      
+    } else if (s === "saving") {
+      eSaving.style.display = "block";
+      m_screen = s;
+    
+    } else if (s === "confirm") {
+      eConfirm.style.display = "block";
       m_screen = s;
       
     } else if (s === "close") {
@@ -740,16 +1182,18 @@ canvas {
   function handleLoad() {
     
     var func_name = "handleLoad";
-    var e;
+    var e, e2;
     var i;
     
-    // Register the canvas with the main screen object
+    // Register the canvases with the main screen object
     e = document.getElementById("cnvMain");
-    if (e == null) {
+    e2 = document.getElementById("cnvNormal");
+    
+    if ((e == null) || (e2 == null)) {
       fault(func_name, 50);
     }
     
-    main_screen.storeCanvas(e);
+    main_screen.storeCanvas(e, e2);
     
     // Add an event handler to resize box to automatically resize the
     // canvas to match the resize box value
@@ -779,6 +1223,35 @@ canvas {
       };
     }
     
+    // Add event handlers to all the mode radio controls that will
+    // invoke updateCursor() so that the cursor type used on the main
+    // canvas will be set properly and also flush any tool state;
+    // furthermore, this will update the display of the normal
+    // adjustment tool appropriately
+    for(i = 0; i < RADIO_MODES.length; i++) {
+      // Get the radio button
+      e = document.getElementById(RADIO_MODES[i]);
+      if (e == null) {
+        fault(func_name, 250);
+      }
+      
+      // Add a change handler that invokes updateCursor(), flushes the
+      // tool state, and updates visibility of normal adjustment tool
+      e.onchange = function(event) {
+        updateCursor();
+        main_screen.flushMode();
+        if (getClickMode() === "normal") {
+          showNormalTool(true);
+        } else {
+          showNormalTool(false);
+        }
+      };
+    }
+    
+    // Force a call to updateCursor() to make sure initial state of
+    // cursor over canvas is correct
+    updateCursor();
+    
     // Add the pointer down event handler to the main canvas; that
     // handler will dynamically add motion and up event handlers when
     // necessary
@@ -787,6 +1260,79 @@ canvas {
       fault(func_name, 300);
     }
     e.onpointerdown = handlePointerDown;
+    
+    // Add the normal down event handler to the normal adjustment scope
+    // canvas; that handler will dynamically add motion and up event
+    // handlers when necessary
+    e = document.getElementById("cnvNormal");
+    if (e == null) {
+      fault(func_name, 350);
+    }
+    e.onpointerdown = handleNormalDown;
+    
+    // Add handlers for the zoom buttons
+    e = document.getElementById("btnZoomIn");
+    if (e == null) {
+      fault(func_name, 400);
+    }
+    e.onclick = function() {
+      main_screen.handleZoom(false);
+    };
+    
+    e = document.getElementById("btnZoomOut");
+    if (e == null) {
+      fault(func_name, 500);
+    }
+    e.onclick = function() {
+      main_screen.handleZoom(true);
+    };
+    
+    // Register the various save and file buttons
+    e = document.getElementById("btnSaveMesh");
+    if (e == null) {
+      fault(func_name, 600);
+    }
+    e.onclick = handleSave;
+    
+    e = document.getElementById("btnCancelSave");
+    if (e == null) {
+      fault(func_name, 700);
+    }
+    e.onclick = function() {
+      // Canceling save just shows the main DIV again
+      showDiv("main");
+    };
+    
+    e = document.getElementById("btnQuit");
+    if (e == null) {
+      fault(func_name, 800);
+    }
+    e.onclick = function() {
+      // If mesh dirty, show confirm screen; else, do quit
+      if (main_screen.isDirty()) {
+        showDiv("confirm");
+      } else {
+        doQuit();
+      }
+    };
+    
+    e = document.getElementById("btnDiscard");
+    if (e == null) {
+      fault(func_name, 900);
+    }
+    e.onclick = function() {
+      // For discarding changes, just force a quit
+      doQuit();
+    };
+    
+    e = document.getElementById("btnCancelQuit");
+    if (e == null) {
+      fault(func_name, 1000);
+    }
+    e.onclick = function() {
+      // For canceling quit, just show the mainDIV again
+      showDiv("main");
+    };
     
     // Begin by loading the data files
     load_screen.load();
@@ -799,6 +1345,9 @@ canvas {
    * All exports are declared within a global "lilac_mesh_html" object.
    */
   window.lilac_mesh_html = {
+    "updateCursor": updateCursor,
+    "grabbingCursor": grabbingCursor,
+    "hideCursor": hideCursor,
     "getClickMode": getClickMode,
     "getLayerVisibility": getLayerVisibility,
     "currentDiv": currentDiv,
@@ -832,38 +1381,32 @@ window.onload = lilac_mesh_html.handleLoad;
       <canvas width="320" height="240" id="cnvMain">
         HTML5 canvas support is required!
       </canvas>
+      <div id="divZoom">
+        <button type="button" id="btnZoomIn">Zoom In</button>
+        <button type="button" id="btnZoomOut">Zoom Out</button>
+      </div>
+      <div id="divNormal">
+        <table>
+          <tr>
+            <td>Normal:</td>
+            <td>
+              <canvas width="64" height="64" id="cnvNormal">
+                HTML5 canvas support is required!
+              </canvas>
+            </td>
+          </tr>
+        </table>
+      </div>
       <div id="divMode">
         <input
           type="radio"
           checked
-          value="add"
-          id="radAdd"
+          value="hand"
+          id="radHand"
           name="rgpMode"/>
-        Add point<br/>
+        Hand tool
         
-        <input
-          type="radio"
-          value="sel_single"
-          id="radSelSingle"
-          name="rgpMode"
-          />
-        Select single point<br/>
-        
-        <input
-          type="radio"
-          value="sel_multi"
-          id="radSelMulti"
-          name="rgpMode"
-          />
-        Select multiple points<br/>
-        
-        <input
-          type="radio"
-          value="unsel"
-          id="radUnSel"
-          name="rgpMode"
-          />
-        Unselect points<br/>
+        <br/>
         
         <input
           type="radio"
@@ -871,7 +1414,67 @@ window.onload = lilac_mesh_html.handleLoad;
           id="radMove"
           name="rgpMode"
           />
-        Move points
+        Move point tool
+        
+        <br/>
+        
+        <input
+          type="radio"
+          value="independent"
+          id="radIndependent"
+          name="rgpMode"
+          />
+        Independent triangle tool
+        
+        <br/>
+        
+        <input
+          type="radio"
+          value="pivot"
+          id="radPivot"
+          name="rgpMode"
+          />
+        Pivot triangle tool
+        
+        <br/>
+        
+        <input
+          type="radio"
+          value="extend"
+          id="radExtend"
+          name="rgpMode"
+          />
+        Extend triangle tool
+        
+        <br/>
+        
+        <input
+          type="radio"
+          value="fill"
+          id="radFill"
+          name="rgpMode"
+          />
+        Fill triangle tool
+        
+        <br/>
+        
+        <input
+          type="radio"
+          value="drop"
+          id="radDrop"
+          name="rgpMode"
+          />
+        Drop triangle tool
+        
+        <br/>
+        
+        <input
+          type="radio"
+          value="normal"
+          id="radNormal"
+          name="rgpMode"
+          />
+        Normal tool
       </div>
       <div id="divSizer">
         Canvas size:
@@ -906,6 +1509,32 @@ window.onload = lilac_mesh_html.handleLoad;
           name="chkShowNormals"/>
         Show normals
       </div>
+      <div id="divFile">
+        <button type="button" id="btnSaveMesh">Save mesh</button>
+        <button type="button" id="btnQuit">Quit</button>
+      </div>
+    </div>
+    
+    <!-- Window shown when a save operation is in progress to prevent
+         changes to mesh while saving -->
+    <div id="divSaving">
+      <p><i>Saving mesh...</i></p>
+      <div id="divSaveFailed">
+        <p><b>Save operation failed!</b></p>
+        <p>
+          <button type="button" id="btnCancelSave">Cancel save</button>
+        </p>
+      </div>
+    </div>
+    
+    <!-- Window shown to confirm leaving and discard changes -->
+    <div id="divConfirm">
+      <p><b>Changes to mesh file are not saved!</b></p>
+      <p>Are you sure you want to discard changes and quit?</p>
+      <p>
+        <button type="button" id="btnDiscard">Discard changes</button>
+        <button type="button" id="btnCancelQuit">Cancel</button>
+      </p>
     </div>
     
     <!-- Window shown when the application is closed -->
