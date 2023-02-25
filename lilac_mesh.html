@@ -47,20 +47,379 @@ canvas {
 }
 
 #divTrace {
-  margin-top: 1em;
+  margin-top: 1.5em;
+}
+
+#divSource {
+  margin-top: 1.5em;
+}
+
+#divOpenBtn {
+  margin-top: 1.5em;
+  padding-top: 0.5em;
+  border-top: thin solid;
+}
+
+#divOpenWarn {
+  margin-top: 1.5em;
+  color: red;
+  font-weight: bold;
+  display: None;
+}
+
+#divTraceError {
+  margin-top: 1.5em;
+  color: red;
+  font-weight: bold;
+  display: None;
+}
+
+#divMeshLoadError {
+  margin-top: 1.5em;
+  color: red;
+  font-weight: bold;
+  display: None;
+}
+
+#divLoadingActive {
+  font-style: italic;
+}
+
+#divSplash {
+  font-style: italic;
+}
+
+#divOpen {
+  display: None;
+}
+
+#divLoading {
+  display: None;
+}
+
+#divMain {
+  display: None;
 }
 
     </style>
     <noscript>
       <style>
 
-#divMain {
+#divOpen {
   display: None;
 }
 
       </style>
     </noscript>
+    <script src="load_screen.js"></script>
+    <script src="main_screen.js"></script>
+    <script src="open_screen.js"></script>
+    <script src="CanvasView.js"></script>
+    <script src="LilacMesh.js"></script>
     <script src="lilac_mesh.js"></script>
+    <script>
+
+// Wrap everything in an anonymous function that we immediately invoke
+// after it is declared -- this prevents anything from being implicitly
+// added to global scope
+(function() {
+  
+  /*
+   * Local data
+   * ==========
+   */
+  
+  /*
+   * The current screen that is being displayed.
+   *
+   * This is one of the values that can be passed to "showDiv" or the
+   * initial "splash" value indicating the splash screen.
+   */
+  var m_screen = "splash";
+  
+  /*
+   * Local functions
+   * ===============
+   */
+  
+  /*
+   * Report an error to console and throw an exception for a fault
+   * occurring within this module.
+   *
+   * Parameters:
+   *
+   *   func_name : string - the name of the function in this module
+   *
+   *   loc : number(int) - the location within the function
+   */
+  function fault(func_name, loc) {
+    
+    // If parameters not valid, set to unknown:0
+    if ((typeof func_name !== "string") || (typeof loc !== "number")) {
+      func_name = "unknown";
+      loc = 0;
+    }
+    loc = Math.floor(loc);
+    if (!isFinite(loc)) {
+      loc = 0;
+    }
+    
+    // Report error to console
+    console.log("Fault at " + func_name + ":" + String(loc) +
+                  " in lilac_mesh_html");
+    
+    // Throw exception
+    throw ("lilac_mesh_html:" + func_name + ":" + String(loc));
+  }
+  
+  /*
+   * Public functions
+   * ================
+   */
+
+  /*
+   * Update the DIV visibility within the open screen DIV to show a
+   * specific error message, or no error message.
+   *
+   * The open files DIV does NOT need to be active to use this function.
+   * This simply updates the DIV styles within the open screen DIV.
+   *
+   * er must be one of the following:
+   *
+   *   "none" - no error to display
+   *   "warn" - error: you must specify a trace file
+   *   "trace" - error loading trace image
+   *   "mesh" - error loading mesh file
+   *
+   * Parameters:
+   *
+   *   er : string - the error DIV to show, or "none"
+   */
+  function openError(er) {
+    
+    var func_name = "openError";
+    var eWarn, eTrace, eMesh;
+    
+    // Check parameter type
+    if (typeof er !== "string") {
+      fault(func_name, 100);
+    }
+    
+    // Locate the error message DIV elements
+    eWarn = document.getElementById("divOpenWarn");
+    eTrace = document.getElementById("divTraceError");
+    eMesh = document.getElementById("divMeshLoadError");
+    
+    if ((eWarn == null) || (eTrace == null) || (eMesh == null)) {
+      fault(func_name, 200);
+    }
+    
+    // Make all DIVs invisible
+    eWarn.style.display = "none";
+    eTrace.style.display = "none";
+    eMesh.style.display = "none";
+    
+    // If something other than "none" was passed, show the correct error
+    // message
+    if (er !== "none") {
+      if (er === "warn") {
+        eWarn.style.display = "block";
+        
+      } else if (er === "trace") {
+        eTrace.style.display = "block";
+        
+      } else if (er === "mesh") {
+        eMesh.style.display = "block";
+        
+      } else {
+        // Unrecognized error identifier
+        fault(func_name, 300);
+      }
+    }
+  }
+  
+  /*
+   * Get the File objects corresponding to the input files the user has
+   * selected.
+   *
+   * The open files DIV does NOT need to be active to use this function.
+   * This simply gets the current values from the controls within the
+   * open screen DIV.
+   *
+   * The return value is a result object with two properties, "trace"
+   * and "mesh".  Each property is either a File object for the file the
+   * user has selected, or false if the user hasn't chosen anything.
+   *
+   * Return:
+   *
+   *   a result object in the format noted above
+   */
+  function getFiles() {
+    
+    var func_name = "getFiles";
+    var eTrace, eMesh;
+    var result;
+    
+    // Get the file controls
+    eTrace = document.getElementById("fTrace");
+    eMesh = document.getElementById("fSource");
+    
+    if ((eTrace == null) || (eMesh == null)) {
+      fault(func_name, 100);
+    }
+    
+    // Start with the result having no files
+    result = {
+      trace: false,
+      mesh: false
+    };
+    
+    // Make sure neither control has more than one file
+    if ((eTrace.files.length > 1) || (eMesh.files.length > 1)) {
+      fault(func_name, 200);
+    }
+    
+    // Store any selected files in the result object
+    if (eTrace.files.length === 1) {
+      result.trace = eTrace.files[0];
+    }
+    if (eMesh.files.length === 1) {
+      result.mesh = eMesh.files[0];
+    }
+    
+    // Return result
+    return result;
+  }
+  
+  /*
+   * Determine which DIV is currently being displayed.
+   *
+   * The return value is one of the string values that can be passed to
+   * showDiv(), or it is the special value "splash" indicating the
+   * initial splash screen.
+   *
+   * Return:
+   *
+   *   string identifying current DIV screen currently being displayed
+   */
+  function currentDiv() {
+    return m_screen;
+  }
+  
+  /*
+   * Display one of the specific DIV screens in the main HTML page.
+   *
+   * The parameter must be one of the following strings:
+   *
+   *   "open" - screen requesting open file information
+   *   "loading" - file(s) loading screen
+   *   "main" - the main application screen
+   *
+   * All other screen DIVs are hidden when the new DIV is displayed, so
+   * there is only one DIV active at a time.
+   *
+   * Initially, a special "splash" DIV is shown that can't be selected
+   * by this function.
+   *
+   * Parameters:
+   *
+   *   s : string - the screen to show
+   */
+  function showDiv(s) {
+    
+    var func_name = "showDiv";
+    var eSplash, eOpen, eLoading, eMain;
+    
+    // Check parameter type
+    if (typeof s !== "string") {
+      fault(func_name, 100);
+    }
+    
+    // Find all the DIV elements, plus the splash screen DIV
+    eSplash = document.getElementById("divSplash");
+    eOpen = document.getElementById("divOpen");
+    eLoading = document.getElementById("divLoading");
+    eMain = document.getElementById("divMain");
+    
+    if ((eSplash == null) || (eOpen == null) ||
+        (eLoading == null) || (eMain == null)) {
+      fault(func_name, 200);
+    }
+    
+    // Begin by hiding all DIVs
+    eSplash.style.display = "none";
+    eOpen.style.display = "none";
+    eLoading.style.display = "none";
+    eMain.style.display = "none";
+    
+    // Show the requested DIV and update the current screen state
+    if (s === "open") {
+      eOpen.style.display = "block";
+      m_screen = s;
+      
+    } else if (s === "loading") {
+      eLoading.style.display = "block";
+      m_screen = s;
+      
+    } else if (s === "main") {
+      eMain.style.display = "block";
+      m_screen = s;
+      
+    } else {
+      // Unrecognized DIV request
+      fault(func_name, 300);
+    }
+  }
+  
+  /*
+   * Event handler for when the document is fully loaded.
+   *
+   * This should be registered later.
+   */
+  function handleLoad() {
+    
+    var func_name = "handleLoad";
+    var e;
+    
+    // Register the canvas with the main screen object
+    e = document.getElementById("cnvMain");
+    if (e == null) {
+      fault(func_name, 50);
+    }
+    
+    main_screen.storeCanvas(e);
+    
+    // Register open screen event handlers
+    e = document.getElementById("btnOpen");
+    if (e == null) {
+      fault(func_name, 100);
+    }
+    
+    e.onclick = open_screen.handleOpen;
+    
+    // @@TODO: register event handlers
+    
+    // Begin by showing the open screen with no error message
+    open_screen.show(false);
+  }
+  
+  /*
+   * Export declarations
+   * ===================
+   * 
+   * All exports are declared within a global "lilac_mesh_html" object.
+   */
+  window.lilac_mesh_html = {
+    "openError": openError,
+    "getFiles": getFiles,
+    "currentDiv": currentDiv,
+    "showDiv": showDiv,
+    "handleLoad": handleLoad
+  };
+  
+}());
+
+    </script>
     <script>
 
 /*
@@ -117,6 +476,11 @@ var m_trace_img = false;
  * faded as if it were 50% transparent over a white background.
  */
 var m_trace_layer = false;
+
+/*
+ * The ID of the presentation DIV that is currently displayed.
+ */
+var m_active_div = "divSplash";
 
 /*
  * Report an error to console and throw an exception for a fault
@@ -573,13 +937,21 @@ function handle_main_mouse_up_move() {
   console.log("handle_main_mouse_up_move");
 }
 
+// @@TODO:
+function handle_open_files() {
+  // @@TODO:
+}
+
 /*
  * Handler to run when the document loads.
+ *
+ * @@TODO: old code below
  */
-window.onload = function() {
+function old_load() {
   
   var func_name = "window.onload";
   var e;
+  var eOpen;
   
   // Add an event handler to resize box to automatically resize and
   // redraw the canvas to match the resize box value
@@ -590,22 +962,6 @@ window.onload = function() {
   e.onchange = function() {
     canvas_resize();
   };
-  
-  // Add an event handler to the trace file control that manages the
-  // trace file
-  e = document.getElementById("fTrace");
-  if (e == null) {
-    html_fault(func_name, 200);
-  }
-  e.onchange = function() {
-    update_trace();
-  }
-  
-  // Resize canvas to match option if necessary
-  canvas_resize();
-  
-  // Force a redraw here so we start out correctly
-  canvas_redraw();
   
   // Attach mouse handlers to the main canvas that call through to the
   // appropriate handler methods
@@ -708,7 +1064,19 @@ window.onload = function() {
       }
     }
   };
+  
+  // Attach event handler to the open files button
+  e = document.getElementById("btnOpen");
+  if (e == null) {
+    html_fault(func_name, 600);
+  }
+  e.onclick = function() {
+    handle_open_files();
+  };
 }
+
+// Register the document loading event
+window.onload = lilac_mesh_html.handleLoad;
 
     </script>
   </head>
@@ -718,6 +1086,56 @@ window.onload = function() {
       <h1>Lilac Mesh Editor</h1>
       <p>This web app requires JavaScript to function!</p>
     </noscript>
+
+    <div id="divSplash">
+      Loading web app...
+    </div>
+
+    <div id="divOpen">
+      <h1>Lilac Mesh Editor</h1>
+      
+      <div id="divOpenWarn">
+        You must choose a trace image to load!
+      </div>
+      
+      <div id="divTraceError">
+        Failed to load the trace image!
+      </div>
+      
+      <div id="divMeshLoadError">
+        Failed to load the mesh file!
+      </div>
+      
+      <div id="divTrace">
+        Choose a trace image:<br/>
+        <input
+          type="file"
+          id="fTrace"
+          name="fTrace"
+          accept="image/*"/>
+      </div>
+      
+      <div id="divSource">
+        Choose a mesh file to load, or leave blank:<br/>
+        <input
+          type="file"
+          id="fSource"
+          name="fSource"
+          accept=".txt,.json,text/plain,application/json"/>
+      </div>
+      
+      <div id="divOpenBtn">
+        <input type="button" value="Open file(s)" id="btnOpen"/>
+      </div>
+    </div>
+    
+    <div id="divLoading">
+      <h1>Lilac Mesh Editor</h1>
+      
+      <div id="divLoadingActive">
+        Loading, please wait...
+      </div>
+    </div>
 
     <div id="divMain">
       <canvas width="320" height="240" id="cnvMain">
@@ -773,14 +1191,6 @@ window.onload = function() {
           <option value="size1024x576">1024 x 576</option>
           <option value="size1280x720">1280 x 720</option>
         </select>
-      </div>
-      <div id="divTrace">
-        Choose a trace image:<br/>
-        <input
-          type="file"
-          id="fTrace"
-          name="fTrace"
-          accept="image/png, image/jpeg"/>
       </div>
     </div>
   </body>
