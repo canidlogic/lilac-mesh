@@ -102,6 +102,39 @@ LilacMesh._fault = function(func_name, loc) {
 };
 
 /*
+ * Numeric comparison function, used for sorting an array of numbers.
+ * 
+ * Parameters:
+ * 
+ *   a - the first parameter
+ * 
+ *   b - the second parameter
+ */
+LilacMesh._numericCmp = function(a, b) {
+  
+  var func_name = "_numericCmp";
+  
+  // Check we got two finite numbers
+  if ((typeof a !== "number") || (typeof b !== "number")) {
+    LilacMesh._fault(func_name, 100);
+  }
+  if (!(isFinite(a) && isFinite(b))) {
+    LilacMesh._fault(func_name, 110);
+  }
+  
+  // Compare numerically
+  if (a < b) {
+    return -1;
+  } else if (a > b) {
+    return 1;
+  } else if (a == b) {
+    return 0;
+  } else {
+    LilacMesh._fault(func_name, 200);
+  }
+};
+
+/*
  * Decode an encoded UID string to its numeric value.
  * 
  * false is returned if the given parameter is not a string in the
@@ -699,7 +732,7 @@ LilacMesh._verify = function(m) {
   }
 
   // Sort the point list accumulated from triangles
-  pa.sort();
+  pa.sort(LilacMesh._numericCmp);
   
   // Create a new point list that only has the unique, sorted points
   // derived from triangles
@@ -2491,7 +2524,7 @@ LilacMesh.prototype.dropTriangle = function(v1, v2, v3) {
   
   // Put all the points in an array and sort the array by UID
   pa = [v1, v2, v3];
-  pa.sort();
+  pa.sort(LilacMesh._numericCmp);
   
   // Initialize point-used array with false values
   pu = [false, false, false];
@@ -2504,7 +2537,7 @@ LilacMesh.prototype.dropTriangle = function(v1, v2, v3) {
     
     // Put the current vertices in an array and sort by UID
     pb = [t[0], t[1], t[2]];
-    pb.sort();
+    pb.sort(LilacMesh._numericCmp);
     
     // Check whether current triangle is a match
     if ((pb[0] === pa[0]) && (pb[1] === pa[1]) &&
