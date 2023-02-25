@@ -32,6 +32,10 @@
  * this script, with a format described in the function documentation
  * for lilacme().
  * 
+ * You must also have a "lilacme2json" or "lilacme2json.exe" program
+ * binary in the same directory as this script.  This program is part of
+ * the main Lilac project.
+ * 
  * For further information, see server.md
  */
 
@@ -45,14 +49,21 @@
    * =======
    */
   
-  const fs = require('fs');
-  const http = require('http');
-  const path = require('path');
+  var child_process = require('child_process');
+  var fs = require('fs');
+  var http = require('http');
+  var path = require('path');
   
   /*
    * Local constants
    * ===============
    */
+  
+  /*
+   * The maximum amount of JSON data in bytes that can be received from
+   * the converter binary.
+   */
+  var MAX_CONVERT_SIZE = (16 * 1024 * 1024);
   
   /*
    * The minimum and maximum allowable IP port numbers for the server.
@@ -99,6 +110,8 @@
    * 
    * This is set at the start of lilacme() and updated each time the
    * file is saved.
+   * 
+   * This stores the JSON version of the mesh, not the Shastina version.
    */
   var m_mesh = false;
   
@@ -265,6 +278,158 @@
   }
   
   /*
+   * Convert a JSON-format mesh into a Shastina mesh.
+   * 
+   * This does not perform a full validity check.  It only superficially
+   * transforms the syntax.  Exception thrown if any problem.
+   * 
+   * Parameters:
+   * 
+   *   str : string - the JSON format mesh
+   * 
+   * Return:
+   * 
+   *   the Shastina format mesh as a string
+   */
+  function meshToShastina(str) {
+    
+    var func_name = "meshToShastina";
+    var m, result;
+    var i, p, t, ar;
+    var v1s, v2s, v3s;
+    var uidm;
+    
+    // Check parameter
+    if (typeof str !== "string") {
+      fault(func_name, 100);
+    }
+    
+    // Convert to JSON
+    try {
+      m = JSON.parse(str);
+    } catch (ex) {
+      fault(func_name, 200);
+    }
+    
+    // Make sure we have a JSON object that has two properties "points"
+    // and "tris" that are both arrays
+    if ((typeof m !== "object") || (m instanceof Array)) {
+      fault(func_name, 300);
+    }
+    if ((!("points" in m)) || (!("tris" in m))) {
+      fault(func_name, 400);
+    }
+    if ((typeof m.points !== "object") ||
+        (typeof m.tris !== "object") ||
+        (!(m.points instanceof Array)) ||
+        (!(m.tris instanceof Array))) {
+      fault(func_name, 500);
+    }
+    
+    // Begin with the header of the result
+    result = "%lilac-mesh;\n%dim " + String(m.points.length) + " " +
+                String(m.tris.length) + ";\n";
+    
+    // Declare each point and build a UID mapping
+    uidm = {};
+    for(i = 0; i < m.points.length; i++) {
+      // Get current point
+      p = m.points[i];
+      
+      // Make sure point is an object that has three string properties,
+      // uid nrm loc
+      if ((typeof p !== "object") || (p instanceof Array)) {
+        fault(func_name, 600);
+      }
+      
+      if ((!("uid" in p)) || (!("nrm" in p)) || (!("loc" in p))) {
+        fault(func_name, 700);
+      }
+      
+      if ((typeof p.uid !== "string") ||
+          (typeof p.nrm !== "string") ||
+          (typeof p.loc !== "string")) {
+        fault(func_name, 800);
+      }
+      
+      // Add a UID mapping for this point
+      uidm["p_" + p.uid] = i;
+      
+      // Output the line break before this point in the Shastina file
+      result = result + "\n";
+      
+      // Split nrm into fields around comma and output to Shastina
+      ar = p.nrm.split(",");
+      if (ar.length !== 2) {
+        fault(func_name, 900);
+      }
+      
+      result = result + ar[0] + " " + ar[1] + " ";
+      
+      // Split loc into fields around comma and output to Shastina to
+      // finish the point command
+      ar = p.loc.split(",");
+      if (ar.length !== 2) {
+        fault(func_name, 1000);
+      }
+      
+      result = result + ar[0] + " " + ar[1] + " p";
+    }
+    
+    // Output a blank line before the triangle commands
+    result = result + "\n";
+    
+    // Declare each triangle
+    for(i = 0; i < m.tris.length; i++) {
+      // Get current triangle
+      t = m.tris[i];
+      
+      // Make sure triangle is an array with three elements that are
+      // strings
+      if ((typeof t !== "object") || (!(t instanceof Array))) {
+        fault(func_name, 1100);
+      }
+      
+      if (t.length !== 3) {
+        fault(func_name, 1200);
+      }
+      
+      if ((typeof t[0] !== "string") ||
+          (typeof t[1] !== "string") ||
+          (typeof t[2] !== "string")) {
+        fault(func_name, 1300);
+      }
+      
+      // Get the UID map names of the UIDs
+      v1s = "p_" + t[0];
+      v2s = "p_" + t[1];
+      v3s = "p_" + t[2];
+      
+      // Make sure each vertex UID is in the UID map
+      if ((!(v1s in uidm)) ||
+          (!(v2s in uidm)) ||
+          (!(v3s in uidm))) {
+        fault(func_name, 1400);
+      }
+      
+      // Print a line break before the triangle statement
+      result = result + "\n";
+      
+      // Print the triangle statement, converting the UID of the
+      // vertices to their zero-based offset in the point array
+      result = result + String(uidm[v1s]) + " " +
+                        String(uidm[v2s]) + " " +
+                        String(uidm[v3s]) + "  t";
+    }
+    
+    // Output the rest of the Shastina file
+    result = result + "\n\n|;\n";
+    
+    // Return result
+    return result;
+  }
+  
+  /*
    * Parse the given string as a port number given on the command line.
    * 
    * The string must be a sequence of one or more decimal digits, and
@@ -324,35 +489,6 @@
   }
   
   /*
-   * Given the path to this script file, convert it to a path to the
-   * HTTP manifest file.
-   * 
-   * The HTTP manifest file is in the same directory as the script file,
-   * but it has the filename "lilacme_manifest.json"
-   * 
-   * Parameters:
-   * 
-   *   str : string - the path to the script file
-   * 
-   * Return:
-   * 
-   *   the path to the manifest file
-   */
-  function scriptToManifest(str) {
-    
-    var func_name = "scriptToManifest";
-    
-    // Check parameter
-    if (typeof str !== "string") {
-      fault(func_name, 100);
-    }
-    
-    // Result is the directory name, the platform-specific separator,
-    // and the filename "lilacme_manifest.json"
-    return (path.dirname(str) + path.sep + "lilacme_manifest.json");
-  }
-  
-  /*
    * Synchronously check whether the given path corresponds to an
    * existing regular file.
    * 
@@ -385,6 +521,75 @@
     
     // Check whether regular file and return result
     return s.isFile();
+  }
+  
+  /*
+   * Given the path to this script file, convert it to a path to the
+   * HTTP manifest file.
+   * 
+   * The HTTP manifest file is in the same directory as the script file,
+   * but it has the filename "lilacme_manifest.json"
+   * 
+   * Parameters:
+   * 
+   *   str : string - the path to the script file
+   * 
+   * Return:
+   * 
+   *   the path to the manifest file
+   */
+  function scriptToManifest(str) {
+    
+    var func_name = "scriptToManifest";
+    
+    // Check parameter
+    if (typeof str !== "string") {
+      fault(func_name, 100);
+    }
+    
+    // Result is the directory name, the platform-specific separator,
+    // and the filename "lilacme_manifest.json"
+    return (path.dirname(str) + path.sep + "lilacme_manifest.json");
+  }
+  
+  /*
+   * Given the path to this script file, convert it to a path to the
+   * Shastina to JSON converter binary.
+   * 
+   * The converter binary is in the same directory as the script file,
+   * but it has either the filename "lilacme2json" or "lilacme2json.exe"
+   * This function will check which of those paths exists as a regular
+   * file.  If neither exists, false is returned.
+   * 
+   * Parameters:
+   * 
+   *   str : string - the path to the script file
+   * 
+   * Return:
+   * 
+   *   the path to the converter binary, or false if not found
+   */
+  function scriptToConvert(str) {
+    
+    var func_name = "scriptToConvert";
+    var result;
+    
+    // Check parameter
+    if (typeof str !== "string") {
+      fault(func_name, 100);
+    }
+    
+    // Find the appropriate path
+    result = path.dirname(str) + path.sep + "lilacme2json";
+    if (!isRegularFile(result)) {
+      result = path.dirname(str) + path.sep + "lilacme2json.exe";
+      if (!isRegularFile(result)) {
+        result = false;
+      }
+    }
+    
+    // Return result
+    return result;
   }
   
   /*
@@ -1165,11 +1370,20 @@
         m_mesh_updating = true;
       }
       
-      // Set the new mesh value
+      // Set the new mesh value as the JSON
       m_mesh = payload;
       
-      // Asynchronously write changes to disk file
-      fs.writeFile(m_mesh_path, m_mesh, {
+      // Convert the JSON mesh to Shastina
+      try {
+        payload = meshToShastina(payload);
+      } catch (ex) {
+        m_mesh_updating = false;
+        httpError(500, response, false);
+        return;
+      }
+      
+      // Asynchronously write Shastina to disk file
+      fs.writeFile(m_mesh_path, payload, {
         "encoding": "utf8",
         "flag": "w"
       }, function(err) {
@@ -1473,6 +1687,11 @@
    * See also server.md for further documentation of the manifest
    * format.
    * 
+   * convert_path is the path to the "lilacme2json" program binary to
+   * use for converting Shastina mesh files to JSON.  If opening an
+   * existing file, the converter will be used to convert the initial
+   * Shastina to the initial JSON.
+   * 
    * All files specified by the manifest will be loaded into memory
    * before the server begins.  Changes to the files after loading will
    * be ignored, so the server must be restarted to refresh files in the
@@ -1490,13 +1709,16 @@
    *   trace_path : string - path to the trace image file
    * 
    *   manifest_path : string - path to the JSON HTTP manifest file
+   * 
+   *   convert_path : string - path to the converter program binary
    */
   function lilacme(
       server_port,
       new_mesh,
       mesh_path,
       trace_path,
-      manifest_path) {
+      manifest_path,
+      convert_path) {
     
     var func_name = "lilacme";
     var t, trxt, tfc;
@@ -1507,7 +1729,8 @@
         (typeof new_mesh !== "boolean") ||
         (typeof mesh_path !== "string") ||
         (typeof trace_path !== "string") ||
-        (typeof manifest_path !== "string")) {
+        (typeof manifest_path !== "string") ||
+        (typeof convert_path !== "string")) {
       fault(func_name, 100);
     }
     
@@ -1543,13 +1766,20 @@
       m_mesh_path = mesh_path;
       
     } else {
-      // Open existing mesh requested, so load from file as a string and
-      // store the path
+      // Open existing mesh requested, so load from file through the
+      // converter and store the path
       try {
-        m_mesh = fs.readFileSync(mesh_path, {
-          "encoding": "utf8",
-          "flag": "r"
-        });
+        m_mesh = child_process.execFileSync(
+                    convert_path,
+                    [mesh_path],
+                    {
+                      "cwd": process.cwd(),
+                      "input": "",
+                      "maxBuffer": MAX_CONVERT_SIZE,
+                      "encoding": "utf8",
+                      "windowsHide": true
+                    });
+        
         m_mesh_path = mesh_path;
         
       } catch (ex) {
@@ -1665,6 +1895,16 @@
     }
   }
   
+  // Determine the converter binary path, making sure a file exists
+  // there at the same time
+  if (app_status) {
+    app_param.convert_path = scriptToConvert(process.argv[1]);
+    if (app_param.convert_path === false) {
+      console.log("Missing lilacme2json converter binary!");
+      app_status = false;
+    }
+  }
+  
   // Decode the port number
   if (app_status) {
     app_param.port = parsePort(process.argv[2]);
@@ -1731,7 +1971,8 @@
         app_param.new_mesh,
         app_param.mesh_path,
         app_param.trace_path,
-        app_param.manifest_path);
+        app_param.manifest_path,
+        app_param.convert_path);
       
     } catch (ex) {
       console.log("Stopped on exception: " + ex);
