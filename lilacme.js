@@ -10,8 +10,8 @@
  * Syntax
  * ------
  * 
- *   ./lilacme [port] open [mesh] [trace]
- *   ./lilacme [port] new [mesh] [trace]
+ *   ./lilacme.js [port] open [mesh] [trace]
+ *   ./lilacme.js [port] new [mesh] [trace]
  * 
  * [port] is the IP port on the localhost (127.0.0.1) to serve files on.
  * It must be a decimal integer in range [1024, 65535].
@@ -28,9 +28,11 @@
  * [trace] is the path to an existing image file that will serve as the
  * tracing file.
  * 
- * You must also have a "http_manifest.json" in the same directory as
+ * You must also have a "lilacme_manifest.json" in the same directory as
  * this script, with a format described in the function documentation
  * for lilacme().
+ * 
+ * For further information, see server.md
  */
 
 // Wrap everything in an anonymous function that we immediately invoke
@@ -62,6 +64,32 @@
   var MAX_PORT_NUMBER = 65535;
   
   /*
+   * The HTML file that is served for "/shutdown"
+   */
+  var SHUTDOWN_HTML =
+    "<!DOCTYPE html>\n" +
+    "<html lang=\"en\">\n" +
+    "  <head>\n" +
+    "    <meta charset=\"utf-8\"/>\n" +
+    "    <title>Server shutdown</title>\n" +
+    "    <meta\n" +
+    "      name=\"viewport\"\n" +
+    "      content=\"width=device-width, initial-scale=1.0\"/>\n" +
+    "  </head>\n" +
+    "  <body>\n" +
+    "    <h1>Server shutdown</h1>\n" +
+    "    <form method=\"post\" action=\"/shutdown\">\n" +
+    "      <input \n" +
+    "        type=\"hidden\"\n" + 
+    "        name=\"ignore_me\"\n" +
+    "        id=\"ignore_me\"\n" +
+    "        value=\"ignore_this\"/>\n" +
+    "      <input type=\"submit\" value=\"Shut down\"/>\n" +
+    "    </form>\n" +
+    "  </body>\n" +
+    "</html>\n";
+  
+  /*
    * Local variables
    * ===============
    */
@@ -73,6 +101,18 @@
    * file is saved.
    */
   var m_mesh = false;
+  
+  /*
+   * The path to the mesh file on the local file system as a string.
+   * 
+   * This is set at the start of lilacme().
+   */
+  var m_mesh_path = false;
+  
+  /*
+   * Flag set to true when a mesh file update is in progress.
+   */
+  var m_mesh_updating = false;
   
   /*
    * HTTP server virtual file system object.
@@ -107,8 +147,9 @@
    * 
    * This virtual file system contains all the data served to the client
    * EXCEPT for "/mesh.json" which is handled specially because the
-   * client can modify it.  Any entry in m_vfs in the "json" category
-   * for file name "mesh" is ignored.
+   * client can modify it, and "/shutdown" which is a built-in file.
+   * Any entry in m_vfs in the "json" category for file name "mesh" is
+   * ignored.
    * 
    * Most of this virtual file system is loaded by parsing the HTTP
    * manifest file and loading all the referenced files into memory.
@@ -116,10 +157,12 @@
    * 
    *   (1) The "/mesh.json" file, as described above
    * 
-   *   (2) The tracing image, either at "/trace.jpg" or "/trace.png",
+   *   (2) The "/shutdown" file
+   * 
+   *   (3) The tracing image, either at "/trace.jpg" or "/trace.png",
    *   which is loaded from the command-line argument
    * 
-   *   (3) The client configuration file at "/config.json", which is
+   *   (4) The client configuration file at "/config.json", which is
    *   generated automatically
    * 
    * The configuration JSON file encodes a JSON object with the
@@ -134,7 +177,11 @@
    * default is used.  You can include empty categories in the HTTP
    * manifest if you want to specify the mime type but you don't have
    * any files to include of that type besides what is handled by this
-   * server.
+   * server.  For the "/shutdown" file, the "html" category is
+   * consulted.
+   * 
+   * See server.md for further information about the architecture of the
+   * HTTP server.
    */
   var m_vfs = false;
   
@@ -144,6 +191,12 @@
    * This is set during beginServer().
    */
   var m_server = false;
+  
+  /*
+   * Flag that is set when a server stop is requested during a request
+   * handler.
+   */
+  var m_stop = false;
   
   /*
    * Local functions
@@ -275,7 +328,7 @@
    * HTTP manifest file.
    * 
    * The HTTP manifest file is in the same directory as the script file,
-   * but it has the filename "http_manifest.json"
+   * but it has the filename "lilacme_manifest.json"
    * 
    * Parameters:
    * 
@@ -295,8 +348,8 @@
     }
     
     // Result is the directory name, the platform-specific separator,
-    // and the filename "http_manifest.json"
-    return (path.dirname(str) + path.sep + "http_manifest.json");
+    // and the filename "lilacme_manifest.json"
+    return (path.dirname(str) + path.sep + "lilacme_manifest.json");
   }
   
   /*
@@ -403,7 +456,8 @@
    * object containing the decoded virtual file system.
    * 
    * The format of the JSON in the given string is defined in the
-   * documentation for the "lilacme" function.
+   * documentation for the "lilacme" function, and also in the server.md
+   * documentation file.
    * 
    * The format of the decoded object is defined in the documentation
    * for the "m_vfs" variable.
@@ -644,12 +698,534 @@
   }
   
   /*
+   * Handle sending an HTTP error status code and a simple message back
+   * to an HTTP client.
+   * 
+   * code is the HTTP status code.  If it is not a recognized integer
+   * status code, it is replaced with 500 (Internal Server Error).  Only
+   * codes in 4xx and 5xx range are recognized.
+   * 
+   * response is the server response object to use to write the
+   * response.  This function will handle completely writing and
+   * finishing a response to the client.
+   * 
+   * headRequest is true if the HEAD method was used by the client,
+   * false in all other cases
+   * 
+   * Parameters:
+   * 
+   *   code : number(int) | mixed - the HTTP status code
+   * 
+   *   response : http.ServerResponse - the object used to respond to
+   *   the client's request
+   * 
+   *   headRequest : boolean - true if client used a HEAD method, false
+   *   otherwise
+   */
+  function httpError(code, response, headRequest) {
+    
+    var func_name = "httpError";
+    var desc;
+    var r;
+    
+    // Check response and headRequest parameters
+    if (typeof response !== "object") {
+      fault(func_name, 100);
+    }
+    if (!(response instanceof http.ServerResponse)) {
+      fault(func_name, 110);
+    }
+    if (typeof headRequest !== "boolean") {
+      fault(func_name, 120);
+    }
+    
+    // Check code parameter, replacing it with 500 if there is a problem
+    if (typeof code !== "number") {
+      code = 500;
+    }
+    if (!isFinite(code)) {
+      code = 500;
+    }
+    if (code !== Math.floor(code)) {
+      code = 500;
+    }
+    if ((code < 400) || (code > 599)) {
+      code = 500;
+    }
+    
+    // Look up the code and set the description; if code not recognized,
+    // set code to 500
+    if (code === 400) {
+      desc = "Bad Request";
+      
+    } else if (code === 403) {
+      desc = "Forbidden";
+      
+    } else if (code === 404) {
+      desc = "Not Found";
+      
+    } else if (code === 405) {
+      desc = "Method Not Allowed";
+      
+    } else if (code === 501) {
+      desc = "Not Implemented";
+      
+    } else if (code === 503) {
+      desc = "Service Unavailable";
+      
+    } else {
+      // Code 500 or unrecognized code
+      code = 500;
+      desc = "Internal Server Error";
+    }
+    
+    // Build the response string
+    r = "HTTP Error " + String(code) + ": " + desc + "\n";
+    
+    // Encode the response string in UTF-8
+    r = Buffer.from(r, "utf8");
+    
+    // Write the header
+    response.writeHead(code, desc, {
+      "Content-Length": r.length,
+      "Content-Type": "text/plain"
+    });
+    
+    // If request method was HEAD, don't actually respond with the body;
+    // in all other cases, transmit the body of the message
+    if (headRequest) {
+      response.end();
+    } else {
+      response.end(r);
+    }
+  }
+  
+  /*
+   * Transmit a successful response to the HTTP client.
+   * 
+   * response is the server response object to use to write the 
+   * response.  This function will handle completely writing and
+   * finishing a response to the client.
+   * 
+   * ct is a string indicating the value of the Content-Type parameter
+   * to transmit.  This function does not check the content type value
+   * beyond making sure it is a string.
+   * 
+   * d is a Buffer containing the raw file to transmit to the client.
+   * 
+   * headRequest is true if the HEAD method was used by the client,
+   * false in all other cases
+   * 
+   * Parameters:
+   * 
+   *   response : http.ServerResponse - the object used to respond to
+   *   the client's request
+   * 
+   *   ct : string - the MIME type to use for the Content-Type value
+   * 
+   *   d : Buffer - the file to transmit to the client
+   * 
+   *   headRequest : boolean - true if client used a HEAD method, false
+   *   otherwise
+   */
+  function httpTransmit(response, ct, d, headRequest) {
+    
+    var func_name = "httpTransmit";
+    
+    // Check parameters
+    if (typeof response !== "object") {
+      fault(func_name, 100);
+    }
+    if (!(response instanceof http.ServerResponse)) {
+      fault(func_name, 110);
+    }
+    if (typeof ct !== "string") {
+      fault(func_name, 120);
+    }
+    if (typeof d !== "object") {
+      fault(func_name, 130);
+    }
+    if (!(d instanceof Buffer)) {
+      fault(func_name, 140);
+    }
+    if (typeof headRequest !== "boolean") {
+      fault(func_name, 150);
+    }
+    
+    // Write the header
+    response.writeHead(200, "OK", {
+      "Content-Length": d.length,
+      "Content-Type": ct
+    });
+    
+    // If request method was HEAD, don't actually respond with the body;
+    // in all other cases, transmit the body of the message
+    if (headRequest) {
+      response.end();
+    } else {
+      response.end(d);
+    }
+  }
+  
+  /*
+   * Function that handles GET and HEAD requests.
+   * 
+   * url is the HTTP URL that was requested, in absolute path form from
+   * the root of the server.
+   * 
+   * The return value is an array with one or two elements.  If the 
+   * array has one element, the single element is an integer that
+   * indicates the HTTP error status code that should be sent in
+   * response.  If the array has two elements, the first element is a
+   * string that has the value for the Content-Type header to respond
+   * with and the second element is a Buffer containing the data that
+   * should be sent back to the client.
+   * 
+   * The m_mesh and m_vfs variables must be set before using this
+   * function.
+   * 
+   * Parameters:
+   * 
+   *   url : string - the absolute path to the resource on the server
+   * 
+   * Return:
+   * 
+   *   an array of one element containing the error status code, or an
+   *   array of two elements containing the content type as a string and
+   *   the data to transmit to the client as a Buffer
+   */
+  function readRequest(url) {
+    
+    var func_name = "readRequest";
+    var ct;
+    var i, j, c;
+    var ua;
+    
+    // Check state
+    if ((m_mesh === false) || (m_vfs === false)) {
+      fault(func_name, 100);
+    }
+    
+    // Check parameter
+    if (typeof url !== "string") {
+      fault(func_name, 200);
+    }
+    
+    // If this is a request for "/mesh.json" then we need to encode the
+    // current setting of m_mesh
+    if (url === "/mesh.json") {
+      // Get JSON content type
+      if ("json" in m_vfs) {
+        ct = m_vfs["json"].mime_type;
+      } else {
+        ct = "application/json";
+      }
+      
+      // Return the encoded mesh data
+      return [ct, Buffer.from(m_mesh, "utf8")];
+    }
+    
+    // If this is a request for "/shutdown" then we need to serve the
+    // hardcoded shutdown HTML file
+    if (url === "/shutdown") {
+      // Get HTML content type
+      if ("html" in m_vfs) {
+        ct = m_vfs["html"].mime_type;
+      } else {
+        ct = "text/html";
+      }
+      
+      // Return the encoded HTML file
+      return [ct, Buffer.from(SHUTDOWN_HTML, "utf8")];
+    }
+    
+    // If this is the special "/" root document, then handle that as a
+    // special case because it is stored specially in the virtual file
+    // system
+    if (url === "/") {
+      // If no entry for the root document, return 404
+      if (!("." in m_vfs)) {
+        return [404];
+      }
+      
+      // Otherwise, serve the special "index" file
+      return [m_vfs["."].mime_type, m_vfs["."].files["index"]];
+    }
+    
+    // For everything besides the /mesh.json, /shutdown, and root files
+    // handled above, we use the virtual file system in the general
+    // case; URL in this case must be at least two characters and the
+    // first must be "/" or return 404
+    if (url.length < 2) {
+      return [404];
+    }
+    if (url.charAt(0) !== "/") {
+      return [404];
+    }
+    
+    // Drop the opening "/" from the URL
+    url = url.slice(1);
+
+    // Make sure exactly one "." character in URL, else 404
+    i = url.indexOf(".");
+    if (i < 0) {
+      return [404];
+    }
+    if (url.lastIndexOf(".") !== i) {
+      return [404];
+    }
+    
+    // Split URL around the "."
+    ua = url.split(".");
+    if (ua.length !== 2) {
+      fault(func_name, 300);
+    }
+
+    // Make sure each component element is non-empty and has only
+    // alphanumeric characters and underscore, else 404
+    if ((ua[0].length < 1) || (ua[1].length < 1)) {
+      return [404];
+    }
+  
+    for(i = 0; i < ua.length; i++) {
+      for(j = 0; j < ua[i].length; j++) {
+        c = ua[i].charCodeAt(j);
+        if (((c < 0x30) || (c > 0x39)) &&
+            ((c < 0x41) || (c > 0x5a)) &&
+            ((c < 0x61) || (c > 0x7a)) &&
+            (c !== 0x5f)) {
+          return [404];
+        }
+      }
+    }
+
+    // If extension and file name are in virtual file system, then
+    // transmit that file, otherwise 404
+    if (ua[1] in m_vfs) {
+      if (ua[0] in m_vfs[ua[1]].files) {
+        return [m_vfs[ua[1]].mime_type, m_vfs[ua[1]].files[ua[0]]];
+      }
+    }
+    return [404];
+  }
+  
+  /*
+   * Function that handles POST requests.
+   * 
+   * url is the HTTP URL that was POSTed to, in absolute path form from
+   * the root of the server.
+   * 
+   * The return value is an array with one or two elements.  If the 
+   * array has one element, the single element is an integer that
+   * indicates the HTTP error status code that should be sent in
+   * response.  If the array has two elements, the first element is a
+   * string that has the value for the Content-Type header to respond
+   * with and the second element is a Buffer containing the data that
+   * should be sent back to the client.
+   * 
+   * The m_server variable must be set before using this function.
+   * 
+   * Note that the data the client transmits to the server during the
+   * POST request is ignored and not requested by this function.  This
+   * is because POST is only used for the special case of "/shutdown"
+   * where the POST data is not relevant.
+   * 
+   * Parameters:
+   * 
+   *   url : string - the absolute path to the resource on the server
+   * 
+   * Return:
+   * 
+   *   an array of one element containing the error status code, or an
+   *   array of two elements containing the content type as a string and
+   *   the data to transmit to the client as a Buffer
+   */
+  function postRequest(url) {
+    
+    var func_name = "postRequest";
+    var d;
+    
+    // Check state
+    if (m_server === false) {
+      fault(func_name, 100);
+    }
+    
+    // Check parameter
+    if (typeof url !== "string") {
+      fault(func_name, 200);
+    }
+    
+    // We only support POST on "/shutdown"; otherwise, return 405
+    if (url !== "/shutdown") {
+      return [405];
+    }
+    
+    // Shut down the server when we receive POST on "/shutdown" -- we'll
+    // do this by setting the m_stop flag so that we do the shutdown
+    // after this request is finished
+    m_stop = true;
+    
+    // Return a simple message to the client
+    d = "HTTP server has shut down.\n";
+    d = Buffer.from(d, "utf8");
+    return ["text/plain", d];
+  }
+  
+  /*
+   * Function that handles PUT requests.
+   * 
+   * Since the handler here is asynchronous, it takes the same
+   * parameters as the handleRequest() function and handles all details
+   * of the request.  The request object must have a method that is a
+   * case-insensitive match for "PUT".
+   * 
+   * The m_mesh and m_mesh_path variables must be set.
+   * 
+   * Parameters:
+   * 
+   *   request : http.IncomingMessage - the client PUT request
+   * 
+   *   response : http.ServerResponse - the object used to respond to
+   *   the client's request
+   */
+  function putRequest(request, response) {
+    
+    var func_name = "putRequest";
+    var req_url;
+    var read_fault = false;
+    var payload = "";
+    
+    // Check state
+    if ((typeof m_mesh !== "string") ||
+        (typeof m_mesh_path !== "string")) {
+      fault(func_name, 100);
+    }
+    
+    // Check parameters
+    if ((typeof request !== "object") ||
+        (typeof response !== "object")) {
+      fault(func_name, 200);
+    }
+    if (!(request instanceof http.IncomingMessage)) {
+      fault(func_name, 210);
+    }
+    if (!(response instanceof http.ServerResponse)) {
+      fault(func_name, 220);
+    }
+    
+    // Check that method is PUT
+    if (request.method.toUpperCase() !== "PUT") {
+      fault(func_name, 300);
+    }
+    
+    // Store the request URL
+    req_url = request.url;
+    
+    // We need to asynchronously read the client data into payload;
+    // begin by adding an error event handler on the read stream
+    request.on("error", function(err) {
+      
+      // If read_fault already set, ignore this duplicate event; else,
+      // set read_fault to prevent further invocations
+      if (read_fault) {
+        return;
+      } else {
+        read_fault = true;
+      }
+      
+      // Send an HTTP error response to the client
+      httpError(500, response, false);
+    });
+    
+    // The function will continue asynchronously in the end event of the
+    // read stream, which occurs when the client payload has been fully
+    // read
+    request.on("end", function() {
+      
+      // If read_fault is set, then ignore this event because we've
+      // already sent an error to the client
+      if (read_fault) {
+        return;
+      }
+      
+      // We have now fully read the client's data into payload string,
+      // so we can proceed -- begin by checking that the URL is for the
+      // special "/mesh.json" object, otherwise error 405
+      if (req_url !== "/mesh.json") {
+        httpError(405, response, false);
+        return;
+      }
+      
+      // If a mesh update is already in progress, then fail with 503;
+      // else, set m_mesh_updating flag before proceeding
+      if (m_mesh_updating) {
+        httpError(503, response, false);
+        return;
+      } else {
+        m_mesh_updating = true;
+      }
+      
+      // Set the new mesh value
+      m_mesh = payload;
+      
+      // Asynchronously write changes to disk file
+      fs.writeFile(m_mesh_path, m_mesh, {
+        "encoding": "utf8",
+        "flag": "w"
+      }, function(err) {
+        
+        var r;
+        
+        // First thing to do when file operation completes is to clear
+        // the m_mesh_updating flag
+        m_mesh_updating = false;
+        
+        // If there was an error, respond with 500 to client
+        if (err) {
+          httpError(500, response, false);
+          return;
+        }
+        
+        // If we got here, we just need to transmit a simple JSON "true"
+        // response to the client
+        r = "true\n";
+        r = Buffer.from(r, "utf8");
+        httpTransmit(response, "application/json", r, false);
+      });
+      
+    });
+    
+    // Set the encoding of the request payload to UTF-8 so we get
+    // decoded strings while reading
+    request.setEncoding("utf8");
+    
+    // Begin asynchronously reading the client data by attaching a data
+    // event handler
+    request.on("data", function(s) {
+      
+      // If read_fault is set, then ignore this event
+      if (read_fault) {
+        return;
+      }
+      
+      // Check parameter
+      if (typeof s !== "string") {
+        fault(func_name, 900);
+      }
+      
+      // Append the new data to the payload
+      payload = payload + s;
+    });
+  }
+  
+  /*
    * Event handler that is called to handle requests to the server.
    * 
    * This is called by the Node.JS HTTP server to handle HTTP requests
    * from the client.
    * 
-   * The m_mesh, m_vfs, and m_server variables must all be set.
+   * The m_mesh, m_mesh_path, m_vfs, and m_server variables must all be
+   * set.
    * 
    * Parameters:
    * 
@@ -662,13 +1238,12 @@
     
     var func_name = "handleRequest";
     var m;
-    var r, ct;
-    var i, j;
-    var u, v, ua, c;
-    var found;
+    var url;
+    var retval;
 
     // Check state
     if ((typeof m_mesh !== "string") ||
+        (typeof m_mesh_path !== "string") ||
         (typeof m_vfs !== "object") ||
         (typeof m_server !== "object")) {
       fault(func_name, 100);
@@ -686,210 +1261,100 @@
       fault(func_name, 220);
     }
     
-    // If the URL is for the special "/mesh.json", we need to do special
-    // handling
-    if (request.url === "/mesh.json") {
-      // Check method
-      m = request.method;
-      m = m.toUpperCase();
-      if ((m === "GET") || (m === "HEAD")) {
-        // GET or HEAD request, first determine content type
-        if ("json" in m_vfs) {
-          ct = m_vfs["json"].mime_type;
-        } else {
-          ct = "application/json";
-        }
-        
-        // Now return current state of mesh
-        r = Buffer.from(m_mesh, "utf8");
-        response.writeHead(200, {
-          "Content-Length": r.length,
-          "Content-Type": ct
-        });
-        if (m === "GET") {
-          response.end(r);
-        } else {
-          response.end();
-        }
-        return;
-        
-      /* } else if (m === "PUT") { */
-      // @@TODO:
-        
-      } else {
-        // Something besides GET, HEAD, or PUT was requested on the mesh
-        r = "Unsupported HTTP method!";
-        r = Buffer.from(r, "utf8");
-        response.writeHead(405, {
-          "Content-Length": r.length,
-          "Content-Type": "text/plain"
-        });
-        response.end(r);
-        return;
-      }
-    }
-    
-    // Otherwise, we only support "GET" and "HEAD" methods
+    // Get the request method and normalize to uppercase
     m = request.method;
     m = m.toUpperCase();
-    if ((m !== "GET") && (m !== "HEAD")) {
-      r = "Unsupported HTTP method!";
-      r = Buffer.from(r, "utf8");
-      response.writeHead(405, {
-        "Content-Length": r.length,
-        "Content-Type": "text/plain"
-      });
-      response.end(r);
+    
+    // If request method is "PUT" then delegate everything to the
+    // special handler
+    if (m === "PUT") {
+      putRequest(request, response);
       return;
     }
-
-    // If URL is for the special root document "/", handle that
-    if (request.url === "/") {
-      // Check whether we have content for root document
-      if ("." in m_vfs) {
-        // Content for root document, so return that
-        r = m_vfs["."].files["index"];
-        response.writeHead(200, {
-          "Content-Length": r.length,
-          "Content-Type": m_vfs["."].mime_type
-        });
-        if (m === "GET") {
-          response.end(r);
-        } else {
-          response.end()
-        }
-        return;
+    
+    // Get the requested URL
+    url = request.url;
+    
+    // Now that we have the method and the requested URL, and we've
+    // handled the special PUT case, we don't need anything more from
+    // the request, so consume any data the client gave to us and
+    // discard it
+    request.resume();
+    
+    // Handle the specific method types (apart from PUT)
+    if (m === "GET") {
+      // GET request, so we're doing a read request
+      retval = readRequest(url);
+      
+      // Handle the different responses
+      if (retval.length === 1) {
+        // HTTP error code was returned
+        httpError(retval[0], response, false);
+        
+      } else if (retval.length === 2) {
+        // File was returned to transmit to client
+        httpTransmit(response, retval[0], retval[1], false);
         
       } else {
-        // No content for root, so 404
-        r = "Not found!";
-        r = Buffer.from(r, "utf8");
-        response.writeHead(404, {
-          "Content-Length": r.length,
-          "Content-Type": "text/plain"
-        });
-        if (m === "GET") {
-          response.end(r);
-        } else {
-          response.end();
-        }
-        return;
-      }
-    }
-
-    // Otherwise, URL must be at least two characters and the first
-    // character must be "/" or clear the found flag
-    found = true;
-    if (found) {
-      if (request.url.length < 2) {
-        found = false;
-      }
-    }
-    if (found) {
-      if (request.url.charAt(0) !== "/") {
-        found = false;
-      }
-    }
-
-    // Get the URL without the opening "/"
-    if (found) {
-      u = request.url.slice(1);
-    }
-
-    // Make sure exactly one "." character in URL
-    if (found) {
-      v = u.indexOf(".");
-      if (v < 0) {
-        found = false;
-      }
-    }
-    if (found) {
-      if (u.lastIndexOf(".") !== v) {
-        found = false;
-      }
-    }
-
-    // Split URL around the "."
-    if (found) {
-      ua = u.split(".");
-      if (ua.length !== 2) {
+        // Shouldn't happen
         fault(func_name, 300);
       }
-    }
-
-    // Make sure each component element is non-empty and has only
-    // alphanumeric characters and underscore
-    if (found) {
-      if ((ua[0].length < 1) || (ua[1].length < 1)) {
-        found = false;
-      }
-    }
-    if (found) {
-      for(i = 0; i < ua.length; i++) {
-        for(j = 0; j < ua[i].length; j++) {
-          c = ua[i].charCodeAt(j);
-          if (((c < 0x30) || (c > 0x39)) &&
-              ((c < 0x41) || (c > 0x5a)) &&
-              ((c < 0x61) || (c > 0x7a)) &&
-              (c !== 0x5f)) {
-            found = false;
-            break;
-          }
-        }
-        if (!found) {
-          break;
-        }
-      }
-    }
-
-    // Look up the extension and file name
-    if (found) {
-      if (ua[1] in m_vfs) {
-        if (ua[0] in m_vfs[ua[1]].files) {
-          r = m_vfs[ua[1]].files[ua[0]];
-          ct = m_vfs[ua[1]].mime_type;
-        } else {
-          found = false;
-        }
+      
+    } else if (m === "HEAD") {
+      // HEAD request, so we're doing a read request
+      retval = readRequest(url);
+      
+      // Handle the different responses
+      if (retval.length === 1) {
+        // HTTP error code was returned
+        httpError(retval[0], response, true);
+        
+      } else if (retval.length === 2) {
+        // File was returned to transmit to client
+        httpTransmit(response, retval[0], retval[1], true);
         
       } else {
-        found = false;
+        // Shouldn't happen
+        fault(func_name, 400);
       }
-    }
-
-    // Either transmit the file or 404
-    if (found) {
-      response.writeHead(200, {
-        "Content-Length": r.length,
-        "Content-Type": ct
-      });
-      if (m === "GET") {
-        response.end(r);
+      
+    } else if (m === "POST") {
+      // POST request
+      retval = postRequest(url);
+      
+      // Handle the different responses
+      if (retval.length === 1) {
+        // HTTP error code was returned
+        httpError(retval[0], response, false);
+        
+      } else if (retval.length === 2) {
+        // File was returned to transmit to client
+        httpTransmit(response, retval[0], retval[1], false);
+        
       } else {
-        response.end();
+        // Shouldn't happen
+        fault(func_name, 500);
       }
       
     } else {
-      r = "Not found!";
-      r = Buffer.from(r, "utf8");
-      response.writeHead(404, {
-        "Content-Length": r.length,
-        "Content-Type": "text/plain"
-      });
-      if (m === "GET") {
-        response.end(r);
-      } else {
-        response.end();
-      }
+      // Unsupported method
+      httpError(405, response, false);
+    }
+    
+    // If m_stop is now set, shut down the server
+    if (m_stop) {
+      console.log("HTTP client requested server shutdown.");
+      console.log("Server is shutting down...");
+      m_server.close();
     }
   }
   
   /*
    * Begin the HTTP server.
    * 
-   * The m_mesh and m_vfs variables must be initialized properly before
-   * using this function.  However, m_server must not be set yet and
-   * must be false.  It will be set by this function.
+   * The m_mesh, m_mesh_path, and m_vfs variables must be initialized
+   * properly before using this function.  However, m_server must not be
+   * set yet and must be false.  It will be set by this function.
    * 
    * server_port is the port that we should set the server up on.  It
    * must be an integer in range [MIN_PORT_NUMBER, MAX_PORT_NUMBER].
@@ -905,6 +1370,9 @@
     // Check state
     if (typeof m_mesh !== "string") {
       fault(func_name, 100);
+    }
+    if (typeof m_mesh_path !== "string") {
+      fault(func_name, 105);
     }
     if (typeof m_vfs !== "object") {
       fault(func_name, 110);
@@ -930,17 +1398,31 @@
     // Create an HTTP server and register the handler function
     m_server = http.createServer(handleRequest);
     
+    // Add an inactivity timeout of five seconds so that it the web
+    // browser client tries to keep a connection open indefinitely, it
+    // will timeout and be closed by the server after five seconds; this
+    // stops clients from preventing the server from shutting down
+    m_server.timeout = 5000;
+    
     // Register error handler, which reports an error and closes down
     // the server
     m_server.on("error", function(err) {
       console.log("Server error!");
       console.log("Cause: " + err);
+      console.log("Server is shutting down...");
       m_server.close();
     });
     
-    // Register handler to report when server closes
     m_server.on("close", function() {
-      console.log("Server closed down.");
+      console.log("Server has shut down.");
+    });
+    
+    // Register an event handler for CTRL+C received that prints a
+    // message and closes down the server
+    process.on("SIGINT", function() {
+      console.log("Server interrupted by signal.");
+      console.log("Server is shutting down...");
+      m_server.close();
     });
     
     // Start the server and register an event handler to report when the
@@ -987,6 +1469,9 @@
    *   (3) If the "json" category exists, it may not contain any files
    *   named "mesh" or "config", because these are dynamically included
    *   by the server
+   * 
+   * See also server.md for further documentation of the manifest
+   * format.
    * 
    * All files specified by the manifest will be loaded into memory
    * before the server begins.  Changes to the files after loading will
@@ -1056,12 +1541,14 @@
       m_mesh = "{\"points\": [], \"tris\": []}\n";
       
     } else {
-      // Open existing mesh requested, so load from file as a string
+      // Open existing mesh requested, so load from file as a string and
+      // store the path
       try {
         m_mesh = fs.readFileSync(mesh_path, {
           "encoding": "utf8",
           "flag": "r"
         });
+        m_mesh_path = mesh_path;
         
       } catch (ex) {
         console.log("Failed to read mesh file!");
