@@ -1537,8 +1537,10 @@
     
     // Initialize the mesh file state
     if (new_mesh) {
-      // New mesh requested, so set to empty mesh file
+      // New mesh requested, so set to empty mesh file and store the
+      // path
       m_mesh = "{\"points\": [], \"tris\": []}\n";
+      m_mesh_path = mesh_path;
       
     } else {
       // Open existing mesh requested, so load from file as a string and
