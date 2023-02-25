@@ -12,7 +12,7 @@ See the documentation at the top of the `lilacme.js` script file for the details
 
 The `lilacme.js` script must be in the same directory as an "HTTP manifest" file named `lilacme_manifest.json`.  The format of this manifest file is described in &sect;2 Manifest.  The server will begin by loading this manifest file, and then loading all files referenced from this manifest into a virtual file system that it stores in memory.  The details of this virtual file system are described in &sect;3 Virtual file system.
 
-Additionally, the `lilacme.js` script must be in the same directory as a compiled `lilacme2json` program binary from the main Lilac project.  This is used to convert Shastina mesh files into the JSON format used by the mesh editor.  For Windows compatibility, this program binary may also be named `lilacme2json.exe`.
+Additionally, the `lilacme.js` script must be in the same directory as a compiled `lilacme2json` program binary.  The source code of this program is in the `util` directory.  This is used to convert Shastina mesh files into the JSON format used by the mesh editor.  For Windows compatibility, this program binary may also be named `lilacme2json.exe`.
 
 The server script will then open an HTTP server on a local port of the local machine and report a web address to the user.  The user then navigates to that local web address in the web browser.  This will load the client-side Lilac Mesh Editor into the web browser from the virtual file system of the server script.  The virtual file system includes all the necessary configuration information for the client-side web application, so the user does not have to do any manual configuration of the web application.
 
