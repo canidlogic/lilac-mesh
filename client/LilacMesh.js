@@ -34,6 +34,9 @@
  * 
  * Also, the "points" and "tris" arrays are intended to be private, so
  * they are renamed "_points" and "_tris"
+ * 
+ * There is also an internal "_dirty" flag that stores whether the mesh
+ * has changed.  See "isDirty()" for more information.
  */
 
 /*
@@ -46,11 +49,12 @@
  * 
  * Invoke this with the "new" keyword to construct a new LilacMesh
  * object.  The initial state of the object is blank, with no points and
- * no triangles defined.
+ * no triangles defined.  The initial state is not dirty.
  */
 function LilacMesh() {
   this._points = [];
   this._tris = [];
+  this._dirty = false;
 }
 
 /*
@@ -152,6 +156,76 @@ LilacMesh._decodeUID = function(str) {
   // Return result
   return result;
 }
+
+/*
+ * Encode a pair of normalized floating-point values into an encoded
+ * string pair.
+ * 
+ * The given values must be finite numbers in normalized range.
+ * 
+ * The integer equivalents will be in range [0, 16384].  However, if
+ * isNorm is set to true, then this will prevent the second integer
+ * value from being 16384 (clamping it to a maximum of 16383), and if
+ * the first integer resolves to zero, the second integer will be set to
+ * zero also.  These additional restrictions are necessary for encoded
+ * normal fields.
+ * 
+ * Parameters:
+ * 
+ *   v1 : number - the first floating-point value to encode
+ * 
+ *   v2 : number - the second floating-point value to encode
+ * 
+ *   isNorm : boolean - true to apply encoded normal restrictions, false
+ *   otherwise
+ * 
+ * Return:
+ * 
+ *   string with the encoded pair
+ */
+LilacMesh._encodePair = function(v1, v2, isNorm) {
+  
+  var func_name = "_encodePair";
+  
+  // Check parameters
+  if ((typeof v1 !== "number") || (typeof v2 !== "number")) {
+    LilacMesh._fault(func_name, 100);
+  }
+  if ((!isFinite(v1)) || (!isFinite(v2))) {
+    LilacMesh._fault(func_name, 110);
+  }
+  if ((!((v1 >= 0) && (v1 <= 1))) ||
+      (!((v2 >= 0) && (v2 <= 1)))) {
+    LilacMesh._fault(func_name, 120);
+  }
+  if (typeof isNorm !== "boolean") {
+    LilacMesh._fault(func_name, 130);
+  }
+  
+  // Convert floating-point to integer and clamp to range
+  v1 = Math.floor(v1 * 16384);
+  v2 = Math.floor(v2 * 16384);
+  
+  v1 = Math.max(0, v1);
+  v2 = Math.max(0, v2);
+  
+  v1 = Math.min(16384, v1);
+  v2 = Math.min(16384, v2);
+  
+  // If isNorm is set, apply additional checks
+  if (isNorm) {
+    // Clamp second integer value to maximum of 16383
+    v2 = Math.min(16383, v2);
+    
+    // If first integer is zero, second is also zero
+    if (v1 === 0) {
+      v2 = 0;
+    }
+  }
+  
+  // Build the encoded string
+  return (String(v1) + "," + String(v2));
+};
 
 /*
  * Decode an encoded string pair of normalized values.
@@ -392,6 +466,8 @@ LilacMesh._seekPoint = function(a, uid) {
  * This is intended to verify objects that have been deserialized from
  * JSON.  It is not necessary otherwise, because the instance functions
  * of LilacMesh will protect the internal integrity of the data.
+ * However, it is also run before serializing with toJSON just to check
+ * for any internal logic errors.
  * 
  * The format of the object must match that described in MeshFormat.md,
  * except that internal data structure transformations (1)-(4) described
@@ -682,6 +758,95 @@ LilacMesh._verify = function(m) {
 };
 
 /*
+ * Private instance functions
+ * ==========================
+ */
+
+/*
+ * Insert a triangle vertex array into the triangle list in the
+ * appropriate triangle order.
+ * 
+ * This does not verify that the triangle array is valid beyond checking
+ * that it has three integers; it simply inserts in the proper place in
+ * the array
+ * 
+ * Parameters:
+ * 
+ *   ta : Array - an array of three integers to insert into the triangle
+ *   list
+ */
+LilacMesh.prototype._insertTri = function(ta) {
+  
+  var func_name = "_insertTri";
+  var i, j, t;
+  
+  // Check parameter
+  if ((typeof ta !== "object") || (!(ta instanceof Array))) {
+    LilacMesh._fault(func_name, 100);
+  }
+  if (ta.length !== 3) {
+    LilacMesh._fault(func_name, 110);
+  }
+  for(i = 0; i < ta.length; i++) {
+    if ((typeof ta[i] !== "number") ||
+        (!isFinite(ta[i])) ||
+        (Math.floor(ta[i]) !== ta[i]) ||
+        (ta[i] < 1) ||
+        (ta[i] > LilacMesh.MAX_POINT_ID)) {
+      LilacMesh._fault(func_name, 120);
+    }
+  }
+  
+  // If triangle array is empty, just insert as the first element and
+  // go no further
+  if (this._tris.length < 1) {
+    this._tris.push([ta[0], ta[1], ta[2]]);
+    return;
+  }
+  
+  // Otherwise, find the index i of the first element in the triangle
+  // list that is greater than the new triangle in the sorting order, or
+  // set i to one beyond the last element if new triangle should come at
+  // the end of the list
+  for(i = 0; i < this._tris.length; i++) {
+    // Get current triangle
+    t = this._tris[i];
+    
+    // Check whether current element is greater, in which case break
+    // here
+    if (t[0] > ta[0]) {
+      break;
+    } else if (t[0] === ta[0]) {
+      if (t[1] > ta[1]) {
+        break;
+      }
+    }
+  }
+  
+  // If new triangle should be added to end of list, add it there and
+  // proceed no further
+  if (i >= this._tris.length) {
+    this._tris.push([ta[0], ta[1], ta[2]]);
+    return;
+  }
+  
+  // If we got here, i is the index of the element in the triangle
+  // array before which we should insert the new triangle, so begin by
+  // duplicating the last element at the end of the list
+  this._tris.push(this._tris[this._tris.length - 1]);
+  
+  // Starting at the second to last element and working back to and
+  // including i, shift all triangles in the list right by one
+  for(j = this._tris.length - 2; j >= i; j--) {
+    this._tris[j + 1] = this._tris[j];
+  }
+  
+  // We can now insert the new element at index i, which is currently a
+  // duplicate of i + 1
+  this._tris[i] = [ta[0], ta[1], ta[2]];
+};
+
+/*
  * Public instance functions
  * =========================
  */
@@ -851,6 +1016,9 @@ LilacMesh.prototype.fromJSON = function(str) {
     ]);
   }
   
+  // Clear the dirty flag
+  this._dirty = false;
+  
   // Return that operation was successful
   return true;
 };
@@ -863,9 +1031,72 @@ LilacMesh.prototype.fromJSON = function(str) {
  *   the encoded JSON as a string
  */
 LilacMesh.prototype.toJSON = function() {
-  // @@TODO:
-  console.log("toJSON");
-  return "{}";
+  
+  var func_name = "toJSON";
+  var m;
+  var p;
+  var t;
+  var i;
+  
+  // Make a copy of the internal mesh structure, renaming the _points
+  // and _tris members to points and tris
+  m = {"points": [], "tris": []};
+  for(i = 0; i < this._points.length; i++) {
+    m.points.push({
+      "uid": this._points[i].uid,
+      "normd": this._points[i].normd,
+      "norma": this._points[i].norma,
+      "x": this._points[i].x,
+      "y": this._points[i].y
+    });
+  }
+  for(i = 0; i < this._tris.length; i++) {
+    m.tris.push([
+      this._tris[i][0],
+      this._tris[i][1],
+      this._tris[i][2],
+    ]);
+  }
+  
+  // Verify our copy of the mesh state
+  if (!LilacMesh._verify(m)) {
+    LilacMesh._fault(func_name, 100);
+  }
+  
+  // We have a verified mesh copy, so now go through the triangles
+  // arrays and replace all array elements with strings storing the
+  // decimal integer
+  for(i = 0; i < m.tris.length; i++) {
+    m.tris[i][0] = String(m.tris[i][0]);
+    m.tris[i][1] = String(m.tris[i][1]);
+    m.tris[i][2] = String(m.tris[i][2]);
+  }
+  
+  // Go through the points list and change all points to the storage
+  // format
+  for(i = 0; i < m.points.length; i++) {
+    // Get point
+    p = m.points[i];
+    
+    // First, change the UID to its string equivalent
+    p.uid = String(p.uid);
+    
+    // Second, encode the normal in a string and drop the individual
+    // normal fields
+    p.nrm = LilacMesh._encodePair(p.normd, p.norma, true);
+    delete p.normd;
+    delete p.norma;
+    
+    // Third, encode the point coordinates in a string and drop the
+    // individual point coordinate fields
+    p.loc = LilacMesh._encodePair(p.x, p.y, false);
+    delete p.x;
+    delete p.y;
+  }
+  
+  // We've changed our copy of the mesh into storage format, so
+  // serialize it into JSON
+  return JSON.stringify(m, null, 2);
 };
 
 /*
@@ -1195,4 +1426,1199 @@ LilacMesh.prototype.getPoint = function(uid) {
   
   // Retrieve the coordinates
   return [p.x, p.y];
-}
+};
+
+/*
+ * Given a point UID, return a copy of its normal.
+ * 
+ * The return value is an array with the normalized distance and
+ * normalized angle, both in range [0.0, 1.0], given in order [d, a].
+ * 
+ * IMPORTANT:  note that the orientation of the Y axis is such that it
+ * point UPWARDS for sake of the angle.
+ * 
+ * A fault occurs if the given UID does not match any of the points in
+ * the mesh.
+ * 
+ * Parameters:
+ * 
+ *   uid : number(int) - the UID of the point to retrieve
+ * 
+ * Return:
+ * 
+ *   an array of two normalized (d,a) values for the normal
+ */
+LilacMesh.prototype.getNorm = function(uid) {
+  
+  var func_name = "getNorm";
+  var p;
+  
+  // Check parameter
+  if (typeof uid !== "number") {
+    LilacMesh._fault(func_name, 100);
+  }
+  if ((!isFinite(uid)) || (uid !== Math.floor(uid))) {
+    LilacMesh._fault(func_name, 110);
+  }
+  
+  // Find the point
+  p = LilacMesh._seekPoint(this._points, uid);
+  if (p === false) {
+    LilacMesh._fault(func_name, 200);
+  }
+  
+  // Get the point
+  p = this._points[p];
+  
+  // Retrieve the normal
+  return [p.normd, p.norma];
+};
+
+/*
+ * Given a point UID, set its normalized coordinates.
+ * 
+ * IMPORTANT:  note that the orientation of the Y axis is such that the
+ * origin is in the BOTTOM-left corner.
+ * 
+ * A fault occurs if the given UID does not match any of the points in
+ * the mesh.
+ * 
+ * The coordinates can have any number value.  If they are not finite,
+ * they will be changed to zero.  If they are finite, they will be
+ * clamped to range [0.0, 1.0].
+ * 
+ * This will verify whether the new point location violates the
+ * counter-clockwise orientation of any triangles the point is a part
+ * of.  If it does, false is returned and the coordinates are not
+ * updated.  Otherwise, true is returned and the coordinates are
+ * updated.
+ * 
+ * Parameters:
+ * 
+ *   uid : number(int) - the UID of the point to retrieve
+ * 
+ *   nx : number - the new normalized X coordinate for the point
+ * 
+ *   ny : number - the new normalized Y coordinate for the point
+ * 
+ * Return:
+ * 
+ *   true if update successful, false if update was not performed
+ *   because a triangle orientation would be violated
+ */
+LilacMesh.prototype.setPoint = function(uid, nx, ny) {
+  
+  var func_name = "setPoint";
+  var i, k;
+  var p, t;
+  var a, b, c;
+  
+  // Check parameters
+  if (typeof uid !== "number") {
+    LilacMesh._fault(func_name, 100);
+  }
+  if ((!isFinite(uid)) || (uid !== Math.floor(uid))) {
+    LilacMesh._fault(func_name, 110);
+  }
+  
+  if ((typeof nx !== "number") || (typeof ny !== "number")) {
+    LilacMesh._fault(func_name, 120);
+  }
+  
+  // Fix coordinates if needed
+  if (!isFinite(nx)) {
+    nx = 0;
+  }
+  if (!isFinite(ny)) {
+    ny = 0;
+  }
+  
+  nx = Math.min(nx, 1);
+  ny = Math.min(ny, 1);
+  
+  nx = Math.max(nx, 0);
+  ny = Math.max(ny, 0);
+  
+  // Find the point
+  p = LilacMesh._seekPoint(this._points, uid);
+  if (p === false) {
+    LilacMesh._fault(func_name, 200);
+  }
+  
+  // Get the point
+  p = this._points[p];
+  
+  // Go through all triangles to check orientation with new location
+  for(i = 0; i < this._tris.length; i++) {
+    
+    // Get current triangle array
+    t = this._tris[i];
+    
+    // Ignore this triangle if current point not in it
+    if ((t[0] !== uid) && (t[1] !== uid) && (t[2] !== uid)) {
+      continue;
+    }
+    
+    // Get the index of the three vertices in the points array, except
+    // set the point that matches the current point to true
+    if (t[0] === uid) {
+      a = true;
+    } else {
+      a = LilacMesh._seekPoint(this._points, t[0]);
+    }
+    
+    if (t[1] === uid) {
+      b = true;
+    } else {
+      b = LilacMesh._seekPoint(this._points, t[1]);
+    }
+    
+    if (t[2] === uid) {
+      c = true;
+    } else {
+      c = LilacMesh._seekPoint(this._points, t[2]);
+    }
+    
+    if ((a === false) || (b === false) || (c === false)) {
+      LilacMesh._fault(func_name, 300);
+    }
+    
+    // Get the actual point records of the vertices, except for the
+    // point we are updating, replace it with a new object that has the
+    // X and Y coordinates set to the new coordinates
+    if (a === true) {
+      a = {"x": nx, "y": ny};
+    } else {
+      a = this._points[a];
+    }
+    
+    if (b === true) {
+      b = {"x": nx, "y": ny};
+    } else {
+      b = this._points[b];
+    }
+    
+    if (c === true) {
+      c = {"x": nx, "y": ny};
+    } else {
+      c = this._points[c];
+    }
+    
+    // Compute the cross product (P2-P1)x(P3-P1) to make sure that the
+    // Z-axis vector has a magnitude greater than zero, ensuring that
+    // the points on the triangle are not colinear and that they are in
+    // counter-clockwise order; since the Z coordinates of our 2D points
+    // are all zero, the X-axis and Y-axis vectors of the cross product
+    // will always have zero magnitude, so we just need to compute the
+    // Z-axis vector, which is ((x2-x1)*(y3-y1) - (y2-y1)*(x3-x1)), and
+    // make sure this is greater than zero
+    k = ((b.x - a.x) * (c.y - a.y)) - ((b.y - a.y) * (c.x - a.x));
+
+    if (!isFinite(k)) {
+      // Couldn't verify orientation, so fail
+      return false;
+    }
+    if (!(k > 0)) {
+      // Orientation doesn't check out, so fail
+      return false;
+    }
+  }
+  
+  // If we got here, new position is fine, so update coordinates and
+  // return true and also set dirty flag
+  p.x = nx;
+  p.y = ny;
+  this._dirty = true;
+  return true;
+};
+
+/*
+ * Given a point UID, set its normalized normal.
+ * 
+ * A fault occurs if the given UID does not match any of the points in
+ * the mesh.
+ * 
+ * The normal coordinates can have any number value.  If they are not
+ * finite, they will be changed to zero.  If they are finite, they will
+ * be clamped to range [0.0, 1.0].
+ * 
+ * Parameters:
+ * 
+ *   uid : number(int) - the UID of the point to retrieve
+ * 
+ *   nd : number - the new normal distance for the point
+ * 
+ *   na : number - the new normal angle for the point
+ */
+LilacMesh.prototype.setNorm = function(uid, nd, na) {
+  
+  var func_name = "setNorm";
+  var p;
+  
+  // Check parameters
+  if (typeof uid !== "number") {
+    LilacMesh._fault(func_name, 100);
+  }
+  if ((!isFinite(uid)) || (uid !== Math.floor(uid))) {
+    LilacMesh._fault(func_name, 110);
+  }
+  
+  if ((typeof nd !== "number") || (typeof na !== "number")) {
+    LilacMesh._fault(func_name, 120);
+  }
+  
+  // Fix coordinates if needed
+  if (!isFinite(nd)) {
+    nd = 0;
+  }
+  if (!isFinite(na)) {
+    na = 0;
+  }
+  
+  nd = Math.min(nd, 1);
+  na = Math.min(na, 1);
+  
+  nd = Math.max(nd, 0);
+  na = Math.max(na, 0);
+  
+  // Find the point
+  p = LilacMesh._seekPoint(this._points, uid);
+  if (p === false) {
+    LilacMesh._fault(func_name, 200);
+  }
+  
+  // Get the point
+  p = this._points[p];
+  
+  // Update normal
+  p.normd = nd;
+  p.norma = na;
+  
+  // Set dirty flag
+  this._dirty = true;
+};
+
+/*
+ * Given normalized image coordinates, find the nearest point in the
+ * mesh.
+ * 
+ * The return value is the uid of the nearest point, or false if there
+ * are no points in the mesh.
+ * 
+ * IMPORTANT:  note that the orientation of the Y axis is such that the
+ * origin is in the BOTTOM-left corner.
+ * 
+ * You can pass any number value for the parameters.  Non-finite numbers
+ * will be replaced with zero, and all other numbers will be clamped to
+ * range [0.0, 1.0].
+ * 
+ * Parameters:
+ * 
+ *   nx : number - the normalized image X coordinate
+ * 
+ *   ny : number - the normalized image Y coordinate
+ * 
+ * Return:
+ * 
+ *   the UID of the nearest point, or false if no points in mesh
+ */
+LilacMesh.prototype.closestPoint = function(nx, ny) {
+  
+  var func_name = "closestPoint";
+  var nearest, nearest_len;
+  var i;
+  var pl;
+  var xd, yd;
+  
+  // Check parameters and clamp
+  if ((typeof nx !== "number") || (typeof ny !== "number")) {
+    LilacMesh._fault(func_name, 100);
+  }
+  
+  if (!isFinite(nx)) {
+    nx = 0;
+  }
+  if (!isFinite(ny)) {
+    ny = 0;
+  }
+  
+  nx = Math.min(nx, 1);
+  ny = Math.min(ny, 1);
+  
+  nx = Math.max(nx, 0);
+  ny = Math.max(ny, 0);
+  
+  // Find the nearest point
+  nearest = false;
+  nearest_len = false;
+  for(i = 0; i < this._points.length; i++) {
+    // Compute the square of the current point distance
+    xd = this._points[i].x - nx;
+    yd = this._points[i].y - ny;
+    pl = (xd * xd) + (yd * yd);
+    
+    // Update nearest if appropriate
+    if (nearest === false) {
+      // This is first point, so store in nearest
+      nearest = this._points[i].uid;
+      nearest_len = pl;
+      
+    } else {
+      // Not first point, so compare to current nearest distance
+      if (pl < nearest_len) {
+        // Closer, so store this point
+        nearest = this._points[i].uid;
+        nearest_len = pl;
+      }
+    }
+  }
+  
+  // Return the search result
+  return nearest;
+};
+
+/*
+ * Add an "independent" triangle to the mesh that has all-new points.
+ * 
+ * Each vertex specified will be created as a new point, and there will
+ * be no points shared with any existing triangles.
+ * 
+ * pa is an array of exactly three point arrays.  Each point array is an
+ * array of two normalized point locations in [x, y] order, with Y
+ * oriented around the BOTTOM-left corner.
+ * 
+ * The new points will always be added so that the first point in the
+ * provided point array has the lowest UID and the third point in the
+ * provided point array has the highest UID.
+ * 
+ * If the provided points are in clockwise orientation, this function
+ * will automatically flip the triangle definition so that it is in
+ * counter-clockwise orientation (but the point UIDs still have the
+ * property given above).  However, if the points are colinear, this
+ * function will fail, not add the triangle, and return false.
+ * 
+ * The normals of the new points will all be set to zero.
+ * 
+ * If the function is successful, the return value is an array of three
+ * UID values specifying the UID of each vertex of the new triangle in
+ * ascending order of UID.
+ * 
+ * The function will also fail in the unlikely event that we have run
+ * out of UID numbers.
+ * 
+ * Parameters:
+ * 
+ *   pa : Array - array of three point-pair arrays specifying the
+ *   vertices
+ * 
+ * Return:
+ * 
+ *   an array of three UID in ascending order if successful, false if
+ *   points were colinear and no triangle could be added (or if we ran
+ *   out of UID numbers)
+ */
+LilacMesh.prototype.addIndependent = function(pa) {
+  
+  var func_name = "addIndependent";
+  var i, j, k;
+  var should_flip;
+  var result;
+  var base_uid;
+  
+  // Check parameter
+  if ((typeof pa !== "object") || (!(pa instanceof Array))) {
+    LilacMesh._fault(func_name, 100);
+  }
+  if (pa.length !== 3) {
+    LilacMesh._fault(func_name, 110);
+  }
+  
+  for(i = 0; i < pa.length; i++) {
+    if ((typeof pa[i] !== "object") || (!(pa[i] instanceof Array))) {
+      LilacMesh._fault(func_name, 120);
+    }
+    if (pa[i].length !== 2) {
+      LilacMesh._fault(func_name, 130);
+    }
+    for(j = 0; j < pa[i].length; j++) {
+      if (typeof pa[i][j] !== "number") {
+        LilacMesh._fault(func_name, 140);
+      }
+      if (!isFinite(pa[i][j])) {
+        LilacMesh._fault(func_name, 150);
+      }
+      if (!((pa[i][j] >= 0) && (pa[i][j] <= 1))) {
+        LilacMesh._fault(func_name, 160);
+      }
+    }
+  }
+  
+  // Compute the cross product (P2-P1)x(P3-P1) to get the Z-axis vector
+  // magnitude; since the Z coordinates of our 2D points are all zero,
+  // the X-axis and Y-axis vectors of the cross product will always have
+  // zero magnitude, so we just need to compute the Z-axis vector, which
+  // is ((x2-x1)*(y3-y1) - (y2-y1)*(x3-x1))
+  k = ((pa[1][0] - pa[0][0]) * (pa[2][1] - pa[0][1])) -
+        ((pa[1][1] - pa[0][1]) * (pa[2][0] - pa[0][0]));
+  
+  // If result is not finite, return false
+  if (!isFinite(k)) {
+    return false;
+  }
+  
+  // If result is greater than zero, no need to flip points; if result
+  // is less than zero, points need to be flipped; if result is zero,
+  // fail because colinear
+  if (k > 0) {
+    should_flip = false;
+  
+  } else if (k < 0) {
+    should_flip = true;
+  
+  } else if (k === 0) {
+    return false;
+    
+  } else {
+    // Shouldn't happen
+    LilacMesh._fault(200);
+  }
+  
+  // If points array currently empty, base UID is one; else, base UID is
+  // one greater than the UID of the last point in the points array
+  if (this._points.length < 1) {
+    base_uid = 1;
+  } else {
+    base_uid = this._points[this._points.length - 1].uid + 1;
+  }
+  
+  // We be able to define UID two beyond base so that we have three new
+  // UID, else fail due to lack of UID
+  if (base_uid + 2 > LilacMesh.MAX_POINT_ID) {
+    return false;
+  }
+  
+  // OK, we can define the points now, so add them to the points array
+  this._points.push({
+    "uid": base_uid,
+    "normd": 0,
+    "norma": 0,
+    "x": pa[0][0],
+    "y": pa[0][1]
+  });
+  
+  this._points.push({
+    "uid": base_uid + 1,
+    "normd": 0,
+    "norma": 0,
+    "x": pa[1][0],
+    "y": pa[1][1]
+  });
+  
+  this._points.push({
+    "uid": base_uid + 2,
+    "normd": 0,
+    "norma": 0,
+    "x": pa[2][0],
+    "y": pa[2][1]
+  });
+  
+  // Add a triangle, obeying the should_flip setting we determined
+  if (should_flip) {
+    this._insertTri([
+      base_uid, base_uid + 2, base_uid + 1
+    ]);
+    
+  } else {
+    this._insertTri([
+      base_uid, base_uid + 1, base_uid + 2
+    ]);
+  }
+  
+  // Set dirty flag
+  this._dirty = true;
+  
+  // Return the UID array, always in ascending UID order
+  return [
+    base_uid, base_uid + 1, base_uid + 2
+  ];
+};
+
+/*
+ * Add a "pivot" triangle to the mesh that uses one existing point but
+ * shares no edges and adds two new points.
+ * 
+ * pivot is the UID of an existing point that will be the "pivot" point
+ * shared with another triangle.
+ * 
+ * pn is an array of exactly two point arrays.  Each point array is an
+ * array of two normalized point locations in [x, y] order, with Y
+ * oriented around the BOTTOM-left corner.
+ * 
+ * The new points will always be added so that the first point in the
+ * provided point array has the lower UID and the second point in the
+ * provided point array has the higher UID.  The existing point will
+ * always have the lowest UID, of course.
+ * 
+ * If the existing point plus the two provided points are in clockwise
+ * orientation, this function will automatically flip the triangle
+ * definition so that it is in counter-clockwise orientation (but the
+ * point UIDs still have the property given above).  However, if the
+ * points are colinear, this function will fail, not add the triangle or
+ * the new points, and return false.
+ * 
+ * The normals of the new points will all be set to zero.
+ * 
+ * If the function is successful, the return value is an array of three
+ * UID values specifying the UID of each vertex of the new triangle in
+ * ascending order of UID, with the first UID being the existing point.
+ * 
+ * The function will also fail in the unlikely event that we have run
+ * out of UID numbers.
+ * 
+ * Parameters:
+ * 
+ *   pivot : number(int) - the UID of an existing point
+ * 
+ *   pn : Array - array of two point-pair arrays specifying the new
+ *   vertices
+ * 
+ * Return:
+ * 
+ *   an array of three UID in ascending order if successful, false if
+ *   points were colinear and no triangle could be added (or if we ran
+ *   out of UID numbers)
+ */
+LilacMesh.prototype.addPivot = function(pivot, pn) {
+  
+  var func_name = "addPivot";
+  var p;
+  var i, j, k;
+  var should_flip;
+  var result;
+  var base_uid;
+  
+  // Check parameters
+  if ((typeof pivot !== "number") || (!isFinite(pivot)) ||
+      (Math.floor(pivot) !== pivot) || (pivot < 1) ||
+      (pivot > LilacMesh.MAX_POINT_ID)) {
+    LilacMesh._fault(func_name, 50);
+  }
+  
+  if ((typeof pn !== "object") || (!(pn instanceof Array))) {
+    LilacMesh._fault(func_name, 100);
+  }
+  if (pn.length !== 2) {
+    LilacMesh._fault(func_name, 110);
+  }
+  
+  for(i = 0; i < pn.length; i++) {
+    if ((typeof pn[i] !== "object") || (!(pn[i] instanceof Array))) {
+      LilacMesh._fault(func_name, 120);
+    }
+    if (pn[i].length !== 2) {
+      LilacMesh._fault(func_name, 130);
+    }
+    for(j = 0; j < pn[i].length; j++) {
+      if (typeof pn[i][j] !== "number") {
+        LilacMesh._fault(func_name, 140);
+      }
+      if (!isFinite(pn[i][j])) {
+        LilacMesh._fault(func_name, 150);
+      }
+      if (!((pn[i][j] >= 0) && (pn[i][j] <= 1))) {
+        LilacMesh._fault(func_name, 160);
+      }
+    }
+  }
+  
+  // Get the pivot point
+  p = LilacMesh._seekPoint(this._points, pivot);
+  if (p === false) {
+    LilacMesh._fault(func_name, 170);
+  }
+  
+  p = this._points[p];
+  
+  // Compute the cross product (P2-P1)x(P3-P1) to get the Z-axis vector
+  // magnitude; since the Z coordinates of our 2D points are all zero,
+  // the X-axis and Y-axis vectors of the cross product will always have
+  // zero magnitude, so we just need to compute the Z-axis vector, which
+  // is ((x2-x1)*(y3-y1) - (y2-y1)*(x3-x1))
+  k = ((pn[0][0] - p.x) * (pn[1][1] - p.y)) -
+        ((pn[0][1] - p.y) * (pn[1][0] - p.x));
+  
+  // If result is not finite, return false
+  if (!isFinite(k)) {
+    return false;
+  }
+  
+  // If result is greater than zero, no need to flip points; if result
+  // is less than zero, points need to be flipped; if result is zero,
+  // fail because colinear
+  if (k > 0) {
+    should_flip = false;
+  
+  } else if (k < 0) {
+    should_flip = true;
+  
+  } else if (k === 0) {
+    return false;
+    
+  } else {
+    // Shouldn't happen
+    LilacMesh._fault(200);
+  }
+  
+  // If points array currently empty, base UID is one; else, base UID is
+  // one greater than the UID of the last point in the points array
+  if (this._points.length < 1) {
+    base_uid = 1;
+  } else {
+    base_uid = this._points[this._points.length - 1].uid + 1;
+  }
+  
+  // We be able to define UID one beyond base so that we have two new
+  // UID, else fail due to lack of UID
+  if (base_uid + 1 > LilacMesh.MAX_POINT_ID) {
+    return false;
+  }
+  
+  // OK, we can define the points now, so add them to the points array
+  this._points.push({
+    "uid": base_uid,
+    "normd": 0,
+    "norma": 0,
+    "x": pn[0][0],
+    "y": pn[0][1]
+  });
+  
+  this._points.push({
+    "uid": base_uid + 1,
+    "normd": 0,
+    "norma": 0,
+    "x": pn[1][0],
+    "y": pn[1][1]
+  });
+  
+  // Add a triangle, obeying the should_flip setting we determined
+  if (should_flip) {
+    this._insertTri([
+      pivot, base_uid + 1, base_uid
+    ]);
+    
+  } else {
+    this._insertTri([
+      pivot, base_uid, base_uid + 1
+    ]);
+  }
+  
+  // Set dirty flag
+  this._dirty = true;
+  
+  // Return the UID array, always in ascending UID order
+  return [
+    pivot, base_uid, base_uid + 1
+  ];
+};
+
+/*
+ * Add an "extension" triangle to the mesh that uses two existing
+ * points and one new point, therefore sharing one edge with another
+ * triangle.
+ * 
+ * ep1 and ep2 are the UIDs of two existing points.  They must not be
+ * the same.
+ * 
+ * (nx, ny) defines the normalized point location of the new point, with
+ * Y oriented around the BOTTOM-left corner.
+ * 
+ * The points will be reordered to be in counter-clockwise orientation
+ * with the UID of the lowest numeric value first.  If the points are
+ * colinear, this function will fail, not add the triangle or the new
+ * point, and return false.
+ * 
+ * This function will also check that the ordered edge, after the
+ * triangle has been correctly oriented, is not used in any existing
+ * triangle.  If it is, this function will fail, not add the triangle or
+ * the new point, and return false.
+ * 
+ * The normal of the new point will be set to zero.
+ * 
+ * If the function is successful, the return value is an array of three
+ * UID values specifying the UID of each vertex of the new triangle in
+ * ascending order of UID, with the first two UIDs being the existing
+ * points and the third UID being the new point.
+ * 
+ * The function will also fail in the unlikely event that we have run
+ * out of UID numbers.
+ * 
+ * Parameters:
+ * 
+ *   ep1 : number(int) - the UID of an existing point
+ * 
+ *   ep2 : number(int) - the UID of another existing point
+ * 
+ *   nx : number - the normalized X coordinate of the new point
+ * 
+ *   ny : number - the normalized Y coordinate of the new point
+ * 
+ * Return:
+ * 
+ *   an array of three UID in ascending order if successful, false if
+ *   points were colinear and no triangle could be added, or if the
+ *   oriented shared edge is not unique, or if we ran out of UID
+ *   numbers
+ */
+LilacMesh.prototype.addExtend = function(ep1, ep2, nx, ny) {
+  
+  var func_name = "addExtend";
+  var p1, p2;
+  var i, k, t;
+  var ip1, ip2;
+  var should_flip;
+  var result;
+  var base_uid;
+  
+  // Check parameters
+  if ((typeof ep1 !== "number") || (typeof ep2 !== "number") ||
+      (!isFinite(ep1)) || (!isFinite(ep2)) ||
+      (Math.floor(ep1) !== ep1) || (Math.floor(ep2) !== ep2) ||
+      (ep1 < 1) || (ep2 < 1) ||
+      (ep1 > LilacMesh.MAX_POINT_ID) ||
+      (ep2 > LilacMesh.MAX_POINT_ID)) {
+    LilacMesh._fault(func_name, 50);
+  }
+  
+  if (ep1 === ep2) {
+    LilacMesh._fault(func_name, 75);
+  }
+  
+  if ((typeof nx !== "number") || (typeof ny !== "number") ||
+      (!isFinite(nx)) || (!isFinite(ny)) ||
+      (!((nx >= 0) && (nx <= 1))) ||
+      (!((ny >= 0) && (ny <= 1)))) {
+    LilacMesh._fault(func_name, 100);
+  }
+  
+  // Re-order ep1 and ep2 if necessary so that ep1 has the lower UID
+  if (ep1 > ep2) {
+    p1 = ep1;
+    ep1 = ep2;
+    ep2 = p1;
+  }
+  
+  // Get the existing points
+  p1 = LilacMesh._seekPoint(this._points, ep1);
+  p2 = LilacMesh._seekPoint(this._points, ep2);
+  
+  if ((p1 === false) || (p2 === false)) {
+    LilacMesh._fault(func_name, 150);
+  }
+  
+  p1 = this._points[p1];
+  p2 = this._points[p2];
+  
+  // Compute the cross product (P2-P1)x(P3-P1) to get the Z-axis vector
+  // magnitude; since the Z coordinates of our 2D points are all zero,
+  // the X-axis and Y-axis vectors of the cross product will always have
+  // zero magnitude, so we just need to compute the Z-axis vector, which
+  // is ((x2-x1)*(y3-y1) - (y2-y1)*(x3-x1))
+  k = ((p2.x - p1.x) * (ny - p1.y)) - ((p2.y - p1.y) * (nx - p1.x));
+  
+  // If result is not finite, return false
+  if (!isFinite(k)) {
+    return false;
+  }
+  
+  // If result is greater than zero, no need to flip points; if result
+  // is less than zero, points need to be flipped; if result is zero,
+  // fail because colinear
+  if (k > 0) {
+    should_flip = false;
+  
+  } else if (k < 0) {
+    should_flip = true;
+  
+  } else if (k === 0) {
+    return false;
+    
+  } else {
+    // Shouldn't happen
+    LilacMesh._fault(200);
+  }
+  
+  // Determine the ordered edge of the two existing points
+  if (should_flip) {
+    ip1 = ep2;
+    ip2 = ep1;
+  } else {
+    ip1 = ep1;
+    ip2 = ep2;
+  }
+  
+  // Verify that no existing triangle already has the ordered edge from
+  // the two existing points
+  for(i = 0; i < this._tris.length; i++) {
+    t = this._tris[i];
+    
+    if (((ip1 === t[0]) && (ip2 === t[1])) ||
+        ((ip1 === t[1]) && (ip2 === t[2])) ||
+        ((ip1 === t[2]) && (ip2 === t[0]))) {
+      return false;
+    }
+  }
+  
+  // If points array currently empty, base UID is one; else, base UID is
+  // one greater than the UID of the last point in the points array
+  if (this._points.length < 1) {
+    base_uid = 1;
+  } else {
+    base_uid = this._points[this._points.length - 1].uid + 1;
+  }
+  
+  // Check that base UID does not exceed maximum point ID
+  if (base_uid > LilacMesh.MAX_POINT_ID) {
+    return false;
+  }
+  
+  // OK, we can define the new point now, so add it to the points array
+  this._points.push({
+    "uid": base_uid,
+    "normd": 0,
+    "norma": 0,
+    "x": nx,
+    "y": ny
+  });
+  
+  // Add a triangle, obeying the should_flip setting we determined
+  if (should_flip) {
+    this._insertTri([
+      ep1, base_uid, ep2
+    ]);
+    
+  } else {
+    this._insertTri([
+      ep1, ep2, base_uid
+    ]);
+  }
+  
+  // Set the dirty flag
+  this._dirty = true;
+  
+  // Return the UID array, always in ascending UID order
+  return [
+    ep1, ep2, base_uid
+  ];
+};
+
+/*
+ * Add a "fill" triangle to the mesh that uses three existing points.
+ * 
+ * v1, v2, and v3 are the UIDs of three existing points.  No two point
+ * UIDs may be equal.
+ * 
+ * The points will be reordered to be in counter-clockwise orientation
+ * with the UID of the lowest numeric value first.  If the points are
+ * colinear, this function will fail, not add the triangle, and return
+ * false.
+ * 
+ * This function will also check that the triangle is not already
+ * present in the mesh, after the triangle has been correctly oriented.
+ * If it is already present, this function will fail, not add the
+ * duplicate triangle, and return false.
+ * 
+ * Parameters:
+ * 
+ *   v1 : number(int) - the UID of the first vertex
+ * 
+ *   v2 : number(int) - the UID of the second vertex
+ * 
+ *   v3 : number(int) - the UID of the second vertex
+ * 
+ * Return:
+ * 
+ *   true if new triangle successfully added, false otherwise
+ */
+LilacMesh.prototype.addFill = function(v1, v2, v3) {
+  
+  var func_name = "addFill";
+  var x, k, t, i;
+  var p1, p2, p3;
+  
+  // Check parameters
+  if ((typeof v1 !== "number") ||
+      (typeof v2 !== "number") ||
+      (typeof v3 !== "number") ||
+      (!isFinite(v1)) ||
+      (!isFinite(v2)) ||
+      (!isFinite(v3)) ||
+      (Math.floor(v1) !== v1) ||
+      (Math.floor(v2) !== v2) ||
+      (Math.floor(v3) !== v3) ||
+      (v1 < 1) ||
+      (v2 < 1) ||
+      (v3 < 1) ||
+      (v1 > LilacMesh.MAX_POINT_ID) ||
+      (v2 > LilacMesh.MAX_POINT_ID) ||
+      (v3 > LilacMesh.MAX_POINT_ID)) {
+    LilacMesh._fault(func_name, 50);
+  }
+  
+  if ((v1 === v2) || (v2 === v3) || (v1 === v3)) {
+    LilacMesh._fault(func_name, 75);
+  }
+  
+  // Re-order vertices if necessary so that the vertex with the lowest
+  // UID value is first
+  if (v3 < v2) {
+    x = v2;
+    v2 = v3;
+    v3 = x;
+  }
+  if (v2 < v1) {
+    x = v1;
+    v1 = v2;
+    v2 = x;
+  }
+  
+  // Get the existing points
+  p1 = LilacMesh._seekPoint(this._points, v1);
+  p2 = LilacMesh._seekPoint(this._points, v2);
+  p3 = LilacMesh._seekPoint(this._points, v3);
+  
+  if ((p1 === false) || (p2 === false) || (p3 === false)) {
+    LilacMesh._fault(func_name, 150);
+  }
+  
+  p1 = this._points[p1];
+  p2 = this._points[p2];
+  p3 = this._points[p3];
+  
+  // Compute the cross product (P2-P1)x(P3-P1) to get the Z-axis vector
+  // magnitude; since the Z coordinates of our 2D points are all zero,
+  // the X-axis and Y-axis vectors of the cross product will always have
+  // zero magnitude, so we just need to compute the Z-axis vector, which
+  // is ((x2-x1)*(y3-y1) - (y2-y1)*(x3-x1))
+  k = ((p2.x - p1.x) * (p3.y - p1.y)) - ((p2.y - p1.y) * (p3.x - p1.x));
+  
+  // If result is not finite, return false
+  if (!isFinite(k)) {
+    return false;
+  }
+  
+  // If result is less than zero, exchange second and third vertices; if
+  // result is zero, fail because colinear
+  if (k < 0) {
+    x = p2;
+    p2 = p3;
+    p3 = x;
+    
+    x = v2;
+    v2 = v3;
+    v3 = x;
+  
+  } else if (k === 0) {
+    return false;
+  }
+  
+  // Verify that triangle not already in mesh
+  for(i = 0; i < this._tris.length; i++) {
+    // Get current triangle
+    t = this._tris[i];
+    
+    // Fail if current triangle equal to new triangle
+    if ((v1 === t[0]) && (v2 === t[1]) && (v3 === t[2])) {
+      return false;
+    }
+  }
+  
+  // If we got here, add the new triangle and return true, and also set
+  // dirty flag
+  this._insertTri([v1, v2, v3]);
+  this._dirty = true;
+  return true;
+};
+
+/*
+ * Drop an existing triangle from a mesh given its vertices.
+ * 
+ * v1, v2, and v3 are the UIDs of the triangle to look for.  No two
+ * point UIDs may be equal.  The UIDs may be in any order, however.
+ * 
+ * If a triangle is dropped, this function will also check for orphaned
+ * points and release any points that are no longer referenced from any
+ * triangles.
+ * 
+ * If the given triangle does not exist in the list, this call is
+ * ignored.
+ * 
+ * Parameters:
+ * 
+ *   v1 : number(int) - the UID of the first vertex
+ * 
+ *   v2 : number(int) - the UID of the second vertex
+ * 
+ *   v3 : number(int) - the UID of the second vertex
+ */
+LilacMesh.prototype.dropTriangle = function(v1, v2, v3) {
+  
+  var func_name = "dropTriangle";
+  var pa, pb, pu;
+  var i, j, t, k;
+  
+  // Check parameters
+  if ((typeof v1 !== "number") ||
+      (typeof v2 !== "number") ||
+      (typeof v3 !== "number") ||
+      (!isFinite(v1)) ||
+      (!isFinite(v2)) ||
+      (!isFinite(v3)) ||
+      (Math.floor(v1) !== v1) ||
+      (Math.floor(v2) !== v2) ||
+      (Math.floor(v3) !== v3) ||
+      (v1 < 1) ||
+      (v2 < 1) ||
+      (v3 < 1) ||
+      (v1 > LilacMesh.MAX_POINT_ID) ||
+      (v2 > LilacMesh.MAX_POINT_ID) ||
+      (v3 > LilacMesh.MAX_POINT_ID)) {
+    LilacMesh._fault(func_name, 50);
+  }
+  
+  if ((v1 === v2) || (v2 === v3) || (v1 === v3)) {
+    LilacMesh._fault(func_name, 75);
+  }
+  
+  // Put all the points in an array and sort the array by UID
+  pa = [v1, v2, v3];
+  pa.sort();
+  
+  // Initialize point-used array with false values
+  pu = [false, false, false];
+  
+  // Scan the triangle list
+  j = false;
+  for(i = 0; i < this._tris.length; i++) {
+    // Get current triangle
+    t = this._tris[i];
+    
+    // Put the current vertices in an array and sort by UID
+    pb = [t[0], t[1], t[2]];
+    pb.sort();
+    
+    // Check whether current triangle is a match
+    if ((pb[0] === pa[0]) && (pb[1] === pa[1]) &&
+        (pb[2] === pa[2])) {
+      // Match, so set j to the index of this triangle
+      j = i;
+      
+    } else {
+      // Not a match, so see if any of our points are in use and update
+      // point-use list appropriately
+      for(k = 0; k < 3; k++) {
+        if ((pa[k] === pb[0]) ||
+            (pa[k] === pb[1]) ||
+            (pa[k] === pb[2])) {
+          pu[k] = true;
+        }
+      }
+    }
+  }
+  
+  // Only proceed if we found the triangle to drop
+  if (j !== false) {
+    // Remove triangle from list
+    if (j >= this._tris.length - 1) {
+      // Triangle is last element in list, so just pop it from end of
+      // list
+      this._tris.pop();
+      
+    } else {
+      // Triangle is not last element in list, so starting at element
+      // and going up to and including second to last element, shift
+      // everything left
+      for(i = j; i < this._tris.length - 1; i++) {
+        this._tris[i] = this._tris[i + 1];
+      }
+      
+      // Pop the last element from the list, which is now a duplicate
+      this._tris.pop();
+    }
+    
+    // Drop any points that are no longer used from the point list
+    for(k = 0; k < 3; k++) {
+      // Skip current point if it is still used
+      if (pu[k]) {
+        continue;
+      }
+      
+      // Point is not used, so find its index in point list
+      j = LilacMesh._seekPoint(this._points, pa[k]);
+      if (j === false) {
+        LilacMesh._fault(func_name, 200);
+      }
+      
+      // Drop point from point list
+      if (j >= this._points.length - 1) {
+        // Point is last point in list, so pop
+        this._points.pop();
+      
+      } else {
+        // Point is not last point in list, so shift everything from
+        // index to second-to-last point left
+        for(i = j; i < this._points.length - 1; i++) {
+          this._points[i] = this._points[i + 1];
+        }
+        
+        // Pop the last point from the list, which is now a duplicate
+        this._points.pop();
+      }
+    }
+    
+    // Set dirty flag
+    this._dirty = true;
+  }
+};
+
+/*
+ * Check whether the mesh is "dirty".
+ * 
+ * The dirty flag is an internal flag.  You can explicitly set it and
+ * clear it with the clearDirty and setDirty functions, though the flag
+ * also gets automatically set and cleared in certain cases described
+ * below.
+ * 
+ * After construction, the initial state of the dirty flag is cleared.
+ * The dirty flag is always cleared after "fromJSON" deserializes a new
+ * mesh state, because this is presumed to be loading from an existing
+ * file.  The dirty flag will be automatically set whenever a public
+ * function (besides fromJSON) changes the state of the mesh.
+ * 
+ * The dirty flag is intended to track whether there are unsaved changes
+ * to the mesh.
+ * 
+ * Return:
+ * 
+ *   true if dirty flag is set for the mesh, false otherwise
+ */
+LilacMesh.prototype.isDirty = function() {
+  return this._dirty;
+};
+
+/*
+ * Explicitly set the dirty flag.
+ * 
+ * See "isDirty()" for further information.
+ */
+LilacMesh.prototype.clearDirty = function() {
+  this._dirty = false;
+};
+
+/*
+ * Explicitly clear the dirty flag.
+ * 
+ * See "isDirty()" for further information.
+ */
+LilacMesh.prototype.setDirty = function() {
+  this._dirty = true;
+};
