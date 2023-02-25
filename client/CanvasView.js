@@ -214,7 +214,44 @@ function CanvasView(im_width, im_height, cv_width, cv_height) {
       configurable: true
     }
   });
+  
+  // Start the magnification stack out -- _magstack is an array that
+  // expands and contracts with push() and pop(), and the elements are
+  // six-element arrays [sw, sh, dx, dy, dw, dh] that store the
+  // dimensions of the source area and the full destination area that
+  // define the magnification level (the center of the view is not part
+  // of the magnification, so the source area coordinates are left out);
+  // the bottom of the stack is always the initial magnification level
+  // and is never removed; _magout is true if the magnification stack is
+  // storing magnifications that are progressively zoomed out or it is
+  // false if the magnification stack is storing magnifications that are
+  // progressively zoomed in; if the stack just has one element, _magout
+  // must still be defined as a boolean but its value has no meaning
+  this._magstack = [];
+  this._magstack.push([
+    this._sw, this._sh, this._dx, this._dy, this._dw, this._dh
+  ]);
+  this._magout = false;
 }
+
+/*
+ * Private constants
+ * =================
+ */
+
+/*
+ * One greater than the maximum number of times that one can zoom in or
+ * zoom out from the initial magnification level.
+ */
+CanvasView._MAX_ZOOM_STEPS = 50;
+
+/*
+ * The scaling multiplier that controls how fast one zooms in or zooms
+ * out in each magnification step.
+ * 
+ * This must be greater than one for magnification to work correctly.
+ */
+CanvasView._ZOOM_SCALE = 1.5;
 
 /*
  * Private static functions
@@ -332,11 +369,377 @@ CanvasView._computeScaleY = function(cv) {
  */
 
 /*
+ * Set the source X and source Y of the view so that the point (nx, ny)
+ * in normalized image space is centered as much as possible.
+ * 
+ * This completely overwrites the sx and sy values of the view without
+ * depending on their current value, so it can be used in the zooming
+ * functions for resetting the (sx, sy) coordinates after a zoom
+ * operation.
+ * 
+ * The given (nx, ny) coordinates just need to be numbers.  If they are
+ * non-finite, they are set to zero.  If they are finite, they are
+ * clamped to range [0.0, 1.0] by this function.  So you can pass any
+ * number value in and this function will correct as needed.
+ * 
+ * Parameters:
+ * 
+ *   nx : number - the normalized X coordinate of the center
+ * 
+ *   ny : number - the normalized Y coordinate of the center
+ */
+CanvasView.prototype.centerAt = function(nx, ny) {
+  
+  var func_name = "centerAt";
+  var sx, sy;
+  var rx, ry;
+  
+  // Check parameters
+  if ((typeof nx !== "number") || (typeof ny !== "number")) {
+    CanvasView._fault(func_name, 100);
+  }
+  
+  // Adjust non-finite parameter values
+  if (!isFinite(nx)) {
+    nx = 0;
+  }
+  if (!isFinite(ny)) {
+    ny = 0;
+  }
+  
+  // Clamp parameter values
+  nx = Math.max(nx, 0);
+  ny = Math.max(ny, 0);
+  
+  nx = Math.min(nx, 1);
+  ny = Math.min(ny, 1);
+  
+  // Invert the Y value to convert to top-left orientation
+  ny = 1 - ny;
+  
+  // Start with (sx, sy) at the position indicated by (nx, ny) when
+  // scaling by image dimensions
+  sx = nx * this._im_width;
+  sy = ny * this._im_height;
+  
+  // In order to center (sx, sy), adjust by half the source width and
+  // height
+  sx = sx - (this._sw / 2);
+  sy = sy - (this._sh / 2);
+  
+  // Compute how much the width and height overshoots the image
+  // boundaries with (sx, sy), or set overshoot to zero if it doesn't
+  rx = 0;
+  if (sx + this._sw > this._im_width) {
+    rx = (sx + this._sw) - this._im_width;
+  }
+  
+  ry = 0;
+  if (sy + this._sh > this._im_height) {
+    ry = (sy + this._sh) - this._im_height;
+  }
+  
+  // We don't want to have negative source coordinates, so clamp rx and
+  // ry by sx and sy
+  rx = Math.min(sx, rx);
+  ry = Math.min(sy, ry);
+  
+  // Adjust by rx and ry
+  sx = sx - rx;
+  sy = sy - ry;
+  
+  // Update (sx, sy)
+  this._sx = sx;
+  this._sy = sy;
+};
+
+/*
+ * Adjust the source window by the given relative coordinates, but
+ * keeping the source window within range of the source image.
+ * 
+ * Also, the relative coordinates are assumed to be in the scale of the
+ * *destination* area, so this function scales them appropriately for
+ * the source area.
+ * 
+ * Parameters:
+ * 
+ *   rx : number - the relative X displacement
+ * 
+ *   ry : number - the relative Y displacement
+ */
+CanvasView.prototype.translate = function(rx, ry) {
+  
+  var func_name = "translate";
+  var tx, ty;
+  var rx, ry;
+  
+  // Check parameters
+  if ((typeof rx !== "number") || (typeof ry !== "number")) {
+    CanvasView._fault(func_name, 100);
+  }
+  
+  // Scale parameters to source area
+  rx = (rx * this._sw) / this._dw;
+  ry = (ry * this._sh) / this._dh;
+  
+  // Set non-finite parameters to zero
+  if (!isFinite(rx)) {
+    rx = 0;
+  }
+  if (!isFinite(ry)) {
+    ry = 0;
+  }
+  
+  // Clamp each parameter to a maximum of the image dimensions
+  rx = Math.min(rx, this._im_width);
+  ry = Math.min(ry, this._im_height);
+  
+  // Compute the target (x, y) coordinates of the source window
+  tx = this._sx + rx;
+  ty = this._sy + ry;
+  
+  // Clamp target coordinates to valid range
+  tx = Math.max(0, tx);
+  ty = Math.max(0, ty);
+  
+  tx = Math.min(this._im_width - 1, tx);
+  ty = Math.min(this._im_height - 1, ty);
+  
+  // Determine the width and height overshoot, if any
+  rx = 0;
+  ry = 0;
+  
+  if (tx + this._sw > this._im_width) {
+    rx = (tx + this._sw) - this._im_width;
+  }
+  if (ty + this._sh > this._im_height) {
+    ry = (ty + this._sh) - this._im_height;
+  }
+  
+  // Adjust to remove overshoot
+  tx = tx - rx;
+  ty = ty - ry;
+  
+  // Update window coordinates
+  this._sx = tx;
+  this._sy = ty;
+};
+
+/*
+ * Adjust the view to zoom in, keeping the current center of the view as
+ * much as is possible.
+ * 
+ * If the maximum zoom-in level has already been reached, this call is
+ * ignored.
+ * 
+ * A stack is used for magnification levels to prevent accumulation of
+ * rounding errors over time.
+ */
+CanvasView.prototype.zoomIn = function() {
+  
+  var func_name = "zoomIn";
+  var nx, ny;
+  var r;
+  var m;
+
+  // If stack is for zooming in and we've reached the maximum stack
+  // size, then ignore the call
+  if ((this._magout === false) &&
+      (this._magstack.length >= CanvasView._MAX_ZOOM_STEPS)) {
+    return;
+  }
+  
+  // Compute the normalized image center of the current source view,
+  // also flipping Y to be oriented to bottom-left
+  nx = this._sx + (this._sw / 2);
+  ny = this._sy + (this._sh / 2);
+  
+  nx = nx / this._im_width;
+  ny = ny / this._im_height;
+  
+  ny = 1 - ny;
+  
+  // Zoom-in is handled differently depending on how the magnification
+  // stack is currently oriented
+  if ((this._magout) && (this._magstack.length > 1)) {
+    // Stack is oriented for zooming out and there is at least one
+    // zoom-out level, so pop the magnification stack and the top of the
+    // magnification stack will be our new source and destination
+    // dimensions
+    this._magstack.pop();
+
+    // Restore source and destination from top of stack, all except the
+    // source (x, y) which is not included in stack
+    m = this._magstack[this._magstack.length - 1];
+    
+    this._sw = m[0];
+    this._sh = m[1];
+    this._dx = m[2];
+    this._dy = m[3];
+    this._dw = m[4];
+    this._dh = m[5];
+    
+    // Set source (x, y) by centering
+    this.centerAt(nx, ny);
+    
+  } else {
+  
+    // Stack has only one element or stack is oriented for zooming in,
+    // so first make sure orientation is zooming in
+    this._magout = false;
+    
+    // We will zoom in first by decreasing the source dimensions by the
+    // scaling factor
+    this._sw = this._sw / CanvasView._ZOOM_SCALE;
+    this._sh = this._sh / CanvasView._ZOOM_SCALE;
+    
+    // Re-center the source window as close as possible to our previous
+    // center
+    this.centerAt(nx, ny);
+    
+    // If either X or Y in the destination window is non-zero, we may
+    // need to expand the view
+    if (this._dx > 0) {
+      // Destination X coordinate is greater than zero, so we need to
+      // widen the view -- first, figure out how much we can widen
+      // relative to the width, taking both the source and destination
+      // windows into account
+      r = Math.min(
+            (this._cv_width / this._dw),
+            (this._im_width / this._sw)
+          );
+      
+      // Widen the source and destination windows, clamping to maximum
+      this._dw = Math.min(this._dw * r, this._cv_width);
+      this._sw = Math.min(this._sw * r, this._im_width);
+      
+      // Center the destination window
+      this._dx = (this._cv_width - this._dw) / 2;
+      
+      // Apply centering to source window again
+      this.centerAt(nx, ny);
+      
+    } else if (this._dy > 0) {
+      // Destination Y coordinate is greater than zero, so we need to
+      // expand view vertically -- first, figure out how much we can
+      // expand relative to the height, taking both the source and
+      // destination windows into account
+      r = Math.min(
+            (this._cv_height / this._dh),
+            (this._im_height / this._sh)
+          );
+      
+      // Expand the source and destination windows, clamping to maximum
+      this._dh = Math.min(this._dh * r, this._cv_height);
+      this._sh = Math.min(this._sh * r, this._im_height);
+      
+      // Center the destination window
+      this._dy = (this._cv_height - this._dh) / 2;
+      
+      // Apply centering to source window again
+      this.centerAt(nx, ny);
+    }
+  
+    // Push the current magnification state onto the stack
+    this._magstack.push([
+      this._sw, this._sh,
+      this._dx, this._dy, this._dw, this._dh
+    ]);
+  }
+};
+
+/*
+ * Adjust the view to zoom out, keeping the current center of the view
+ * as much as is possible.
+ * 
+ * If the maximum zoom-out level has already been reached, this call is
+ * ignored.
+ * 
+ * A stack is used for magnification levels to prevent accumulation of
+ * rounding errors over time.
+ */
+CanvasView.prototype.zoomOut = function() {
+  
+  var func_name = "zoomOut";
+  var nx, ny;
+  var dx, dy, dw, dh;
+  var m;
+  
+  // If stack is for zooming out and we've reached the maximum stack
+  // size, then ignore the call
+  if ((this._magout === true) &&
+      (this._magstack.length >= CanvasView._MAX_ZOOM_STEPS)) {
+    return;
+  }
+  
+  // Zoom-out is handled differently depending on how the magnification
+  // stack is currently oriented
+  if ((!(this._magout)) && (this._magstack.length > 1)) {
+    // Stack is oriented for zooming in and there is at least one 
+    // zoom-in level, so pop the magnification stack and the top of the
+    // magnification stack will be our new source and destination
+    // dimensions
+    this._magstack.pop();
+
+    // Compute the normalized image center of the current source view,
+    // also flipping Y to be oriented to bottom-left
+    nx = this._sx + (this._sw / 2);
+    ny = this._sy + (this._sh / 2);
+    
+    nx = nx / this._im_width;
+    ny = ny / this._im_height;
+    
+    ny = 1 - ny;
+    
+    // Restore source and destination from top of stack, all except the
+    // source (x, y) which is not included in stack
+    m = this._magstack[this._magstack.length - 1];
+    
+    this._sw = m[0];
+    this._sh = m[1];
+    this._dx = m[2];
+    this._dy = m[3];
+    this._dw = m[4];
+    this._dh = m[5];
+    
+    // Set source (x, y) by centering
+    this.centerAt(nx, ny);
+    
+  } else {
+  
+    // Stack has only one element or stack is oriented for zooming out,
+    // so first make sure orientation is zooming out
+    this._magout = true;
+    
+    // Initial zoom level always has full image displayed in destination
+    // view, so we just have to decrease the destination dimensions by
+    // the scaling factor and keep them in the center
+    dw = this._dw / CanvasView._ZOOM_SCALE;
+    dh = this._dh / CanvasView._ZOOM_SCALE;
+    
+    dx = this._dx + ((this._dw - dw) / 2);
+    dy = this._dy + ((this._dh - dh) / 2);
+    
+    // Update the current state of the destination
+    this._dx = dx;
+    this._dy = dy;
+    this._dw = dw;
+    this._dh = dh;
+  
+    // Push the current magnification state onto the stack
+    this._magstack.push([
+      this._sw, this._sh,
+      this._dx, this._dy, this._dw, this._dh
+    ]);
+  }
+};
+
+/*
  * Map an X coordinate on the canvas to a normalized image X coordinate
  * in range [0.0, 1.0].
  * 
- * false is returned if the given canvas X coordinate is not on the
- * image.
+ * If the given canvas X coordinate is not on the image, it is clamped
+ * to the nearest boundary.
  * 
  * Parameters:
  * 
@@ -344,7 +747,7 @@ CanvasView._computeScaleY = function(cv) {
  * 
  * Return:
  * 
- *   the corresponding normalized image X coordinate, or false
+ *   the corresponding normalized image X coordinate
  */
 CanvasView.prototype.mapToNormX = function(x) {
   
@@ -355,14 +758,17 @@ CanvasView.prototype.mapToNormX = function(x) {
     CanvasView._fault(func_name, 100);
   }
   
-  // If number is not finite, don't map
+  // If number is not finite, return zero
   if (!isFinite(x)) {
-    return false;
+    return 0;
   }
   
-  // If coordinate is not in the destination range, don't map
-  if (!((x >= this.dx) && (x <= (this.dx + this.dw - 1)))) {
-    return false;
+  // If coordinate is not in the destination range, clamp
+  if (!(x >= this.dx)) {
+    return 0;
+    
+  } else if (!(x <= (this.dx + this.dw - 1))) {
+    return 1;
   }
   
   // Convert coordinate to offset from start of destination range
@@ -382,8 +788,8 @@ CanvasView.prototype.mapToNormX = function(x) {
  * Map a Y coordinate on the canvas to a normalized image X coordinate
  * in range [0.0, 1.0].
  * 
- * false is returned if the given canvas Y coordinate is not on the
- * image.
+ * If the given canvas Y coordinate is not on the image, it is clamped
+ * to the nearest boundary.
  * 
  * Parameters:
  * 
@@ -391,7 +797,7 @@ CanvasView.prototype.mapToNormX = function(x) {
  * 
  * Return:
  * 
- *   the corresponding normalized image Y coordinate, or false
+ *   the corresponding normalized image Y coordinate
  */
 CanvasView.prototype.mapToNormY = function(y) {
   
@@ -402,14 +808,18 @@ CanvasView.prototype.mapToNormY = function(y) {
     CanvasView._fault(func_name, 100);
   }
   
-  // If number is not finite, don't map
+  // If number is not finite, return zero
   if (!isFinite(y)) {
-    return false;
+    return 0;
   }
   
-  // If coordinate is not in the destination range, don't map
-  if (!((y >= this.dy) && (y <= (this.dy + this.dh - 1)))) {
-    return false;
+  // If coordinate is not in the destination range, clamp, remembering
+  // to invert the Y coordinate
+  if (!(y >= this.dy)) {
+    return 1;
+    
+  } else if (!(y <= (this.dy + this.dh - 1))) {
+    return 0;
   }
   
   // Convert coordinate to offset from start of destination range
