@@ -4,24 +4,14 @@
  * load_screen.js
  * ==============
  * 
- * Module for handling the loading files screen of the Lilac Mesh
- * Editor.
+ * Module for handling loading data files during initialization of the
+ * Lilac Mesh Editor when the splash screen is showing.
  */
 
 // Wrap everything in an anonymous function that we immediately invoke
 // after it is declared -- this prevents anything from being implicitly
 // added to global scope
 (function() {
-  
-  /*
-   * Local data
-   * ==========
-   */
-  
-  /*
-   * The mesh data object that was loaded, or false if nothing loaded.
-   */
-  var m_mesh_data = false;
   
   /*
    * Local functions
@@ -59,121 +49,125 @@
   }
   
   /*
-   * Handler function called once we have fully loaded the trace image
-   * and optionally also the mesh data.
-   * 
-   * img is an <img> element that has been completely loaded with the
-   * trace image and that has dimensions at least two.
-   * 
-   * mesh is false if there is no mesh data to load, or else a LilacMesh
-   * to use.
+   * Load function that is called once we have determined the path to
+   * the tracing image from the client-side configuration file and also
+   * loaded the initial mesh state from the mesh file.
    * 
    * Parameters:
    * 
-   *   img : HTMLImageElement - the fully loaded tracing image
+   *   trace_path : string - the path to the tracing image
    * 
-   *   m : LilacMesh | false - an object storing the initial mesh data,
-   *   or false if no initial mesh data loaded
+   *   mesh : LilacMesh - the initial mesh state
    */
-  function fullLoad(img, m) {
+  function loadWithMesh(trace_path, mesh) {
     
-    var func_name = "fullLoad";
-    
-    // Check parameters
-    if (typeof img !== "object") {
-      fault(func_name, 100);
-    }
-    if (!(img instanceof HTMLImageElement)) {
-      fault(func_name, 200);
-    }
-    if ((img.naturalWidth < 2) || (img.naturalHeight < 2)) {
-      fault(func_name, 250);
-    }
-    if (m !== false) {
-      if (typeof m !== "object") {
-        fault(func_name, 300);
-      }
-      if (!(m instanceof LilacMesh)) {
-        fault(func_name, 400);
-      }
-    }
-    
-    // If no mesh was provided, get a blank mesh
-    if (m === false) {
-      m = new LilacMesh();
-    }
-    
-    // Now we can show the main screen
-    main_screen.show(img, m);
-  }
-  
-  /*
-   * Load the trace image from a data URL.
-   * 
-   * If the trace image loads correctly, fullLoad() will be invoked
-   * asynchronously.
-   * 
-   * An exception is thrown if there is a problem.
-   * 
-   * Parameters:
-   * 
-   *   durl - a data URL containing the raw image to load
-   */
-  function loadTrace(durl) {
-    
-    var func_name = "loadTrace";
+    var func_name = "loadWithMesh";
     var im;
     
-    // Check parameter type
-    if (typeof durl !== "string") {
+    // Check parameters
+    if (typeof trace_path !== "string") {
       fault(func_name, 100);
     }
+    if ((typeof mesh !== "object") || (!(mesh instanceof LilacMesh))) {
+      fault(func_name, 110);
+    }
     
-    // Create a new <img> element
+    // All we have left to do is load the tracing image, but we will use
+    // an <img> element to load this rather than an XMLHttpRequest, so
+    // create a new <img> element
     im = document.createElement("img");
     
-    // Set error handler for <img> element so that it clears local state
-    // and goes back to open page with an error message displayed
+    // Set error handler for <img> element so that it loadFailed()
     im.onerror = function() {
-      m_mesh_data = false;
-      open_screen.show("trace");
+      lilac_mesh_html.loadFailed("Tracing image failed to load!");
     };
     
-    // Set successful load handler for <img> element so that it invokes
-    // fullLoad() -- but also check that dimensions are at least two
-    // here, failing if they are not
+    // Function continues in successful load handler for <img> element
     im.onload = function() {
-      if ((im.naturalWidth >= 2) && (im.naturalHeight >= 2)) {
-        fullLoad(im, m_mesh_data);
-        m_mesh_data = false;
-      } else {
-        m_mesh_data = false;
-        open_screen.show("trace");
+      
+      // First of all, check that loaded image has width and height of
+      // at least two
+      if ((im.naturalWidth < 2) || (im.naturalHeight < 2)) {
+        lilac_mesh_html.loadFailed(
+          "Tracing image dimensions must both be at least two!");
+        return;
       }
+      
+      // We now have a valid and loaded trace image as well as our
+      // initial mesh state loaded, so we can finally show the main
+      // screen
+      main_screen.show(im, mesh);
     };
     
-    // Set the source of the <img> element to the given data URL so that
-    // it starts loading asynchronously
-    im.src = durl;
+    // Set the source of the <img> element to the given trace path so
+    // that it starts loading asynchronously
+    im.src = trace_path;
   }
   
   /*
-   * Load the mesh object from a JSON string.
-   * 
-   * The result will be stored in the local m_mesh_data variable.  false
-   * is stored if loading fails.
+   * Load function that is called once we have determined the path to
+   * the tracing image from the client-side configuration file.
    * 
    * Parameters:
    * 
-   *   str : string | mixed - the JSON string to decode
+   *   trace_path : string - the path to the tracing image
    */
-  function loadMesh(str) {
+  function loadWithTracePath(trace_path) {
     
-    // Attempt to decode
-    m_mesh_data = new LilacMesh();
-    if (!m_mesh_data.fromJSON(str)) {
-      m_mesh_data = false;
+    var func_name = "loadWithTracePath";
+    var request;
+    
+    // Check parameter
+    if (typeof trace_path !== "string") {
+      fault(func_name, 100);
     }
+    
+    // We want to load the mesh file before the tracing image because it
+    // is likely to be a much smaller file, so create a new request
+    // object and open a request for the mesh file that will be
+    // retrieved as a text string
+    request = new XMLHttpRequest();
+    request.open("GET", "/mesh.json");
+    request.responseType = "text";
+    
+    // The function will continue within the asynchronous handler for
+    // the request
+    request.onreadystatechange = function() {
+      
+      var result;
+      var m;
+      
+      // Ignore the event if the process isn't complete
+      if (request.readyState !== 4) {
+        return;
+      }
+      
+      // If the request wasn't successful, then loadFailed() and proceed
+      // no further
+      if (request.status !== 200) {
+        lilac_mesh_html.loadFailed("Failed to read /mesh.json!");
+        return;
+      }
+      
+      // If we got here, we successfully loaded the file as text, so get
+      // the text as a string
+      result = request.responseText;
+      
+      // Create a new LilacMesh and try to load it from the mesh file
+      m = new LilacMesh();
+      if (!m.fromJSON(result)) {
+        lilac_mesh_html.loadFailed(
+          "/mesh.json was not a valid mesh file!");
+        return;
+      }
+      
+      // If we got here, we successfully loaded the mesh from the file,
+      // so proceed with the next load stage
+      loadWithMesh(trace_path, m);
+    };
+    
+    // Asynchronously start the request
+    request.send(null);
   }
   
   /*
@@ -182,138 +176,97 @@
    */
   
   /*
-   * Perform the load operation given File objects representing the
-   * user-selected files.
+   * Perform the client-side webapp initialization.
    * 
-   * fTrace is required.  fMesh is optional and can be set to false if
-   * not provided.  If no mesh file is provided, the initial state will
-   * be an empty mesh.
+   * This is intended to be called at the start of the program while the
+   * splash screen is being displayed.  However, you should register
+   * event handlers for all the various user interface modules before
+   * calling this function.
    * 
-   * Parameters:
+   * The loading screen will first load the client-side configuration
+   * data from "/config.json".  Then, it will load the initial mesh file
+   * from "/mesh.json".  Finally, it will load the tracing image from
+   * the path given in the client-side configuration data.
    * 
-   *   fTrace : File - the trace image to load
+   * If everything is successful, this function will call the show()
+   * function of the main_screen module with the loaded trace image and
+   * the initial mesh state.
    * 
-   *   fMesh : File | false - the mesh file to load, or false if no mesh
-   *   provided
+   * If there is a problem, this function will invoke the loadFailed()
+   * function of the lilac_mesh_html module, passing a string indicating
+   * what the problem was.
+   * 
+   * Note that loading is asynchronous.  This function returns right
+   * away after scheduling the first load.  The show() function of the
+   * main_screen module or the loadFailed() function of the presentation
+   * lilac_mesh_html module will be invoked only later.
    */
-  function load(fTrace, fMesh) {
+  function load() {
     
-    var func_name = "load";
-    var traceReader, meshReader;
+    var request;
     
-    // Check parameters
-    if (typeof fTrace !== "object") {
-      fault(func_name, 100);
-    }
-    if (!(fTrace instanceof File)) {
-      fault(func_name, 110);
-    }
-    if (fMesh !== false) {
-      if (typeof fMesh !== "object") {
-        fault(func_name, 120);
-      }
-      if (!(fMesh instanceof File)) {
-        fault(func_name, 130);
-      }
-    }
+    // We begin by loading the client-side configuration file, so create
+    // a new request object and open a request for the config file that
+    // will be retrieved as a text string
+    request = new XMLHttpRequest();
+    request.open("GET", "/config.json");
+    request.responseType = "text";
     
-    // Show the loading screen while we are working
-    lilac_mesh_html.showDiv("loading");
-    
-    // Clear anything stored in the local variables
-    m_mesh_data = false;
-    
-    // We are going to get both the file reader for the tracing image
-    // and the file reader for the mesh file (if there is one) defined
-    // before starting any operation so that they are ready
-    traceReader = new FileReader();
-    
-    if (fMesh !== false) {
-      meshReader = new FileReader();
-    } else {
-      meshReader = false;
-    }
-    
-    // Define both the error and abort events so that we go back to the
-    // open screen with a displayed error message after clearing local
-    // state
-    traceReader.onerror = function() {
-      m_mesh_data = false;
-      open_screen.show("trace");
-    };
-    traceReader.onabort = function() {
-      m_mesh_data = false;
-      open_screen.show("trace");
-    };
-    
-    if (meshReader !== false) {
-      meshReader.onerror = function() {
-        m_mesh_data = false;
-        open_screen.show("mesh");
-      };
-      meshReader.onabort = function() {
-        m_mesh_data = false;
-        open_screen.show("mesh");
-      };
-    }
-    
-    // Define the load events so that we route to an internal load
-    // handler function with the data we read; also, if a mesh file is
-    // defined, we will perform the loads in sequence so that the mesh
-    // file load is attempted, and the trace image load is only
-    // attempted if the mesh file loaded successfully
-    if (meshReader !== false) {
-      meshReader.onload = function() {
-        // Call through to the handler, catching any exceptions here
-        try {
-          loadMesh(meshReader.result);
-        } catch(e) {
-          // Something went wrong loading the mesh file, so go back to
-          // the open screen with an error and proceed no further; also,
-          // clear local state
-          open_screen.show("mesh");
-          m_mesh_data = false;
-          return;
-        }
-        
-        if (m_mesh_data === false) {
-          // Failure during loading mesh file, so go back to the open
-          // screen with an error and proceed no further
-          open_screen.show("mesh");
-          return;
-        }
-        
-        // If we got here successfully, our next step is to invoke the
-        // the trace reader asynchronously
-        traceReader.readAsDataURL(fTrace);
-      };
-    }
-    
-    traceReader.onload = function() {
-      // Call through to the handler, catching any exceptions here
-      try {
-        loadTrace(traceReader.result);
-      } catch(e) {
-        // Something went wrong loading the trace image, so go back to
-        // the open screen with an error and proceed no further; also,
-        // clear local state
-        open_screen.show("trace");
-        m_mesh_data = false;
+    // The function will continue within the asynchronous handler for
+    // the request
+    request.onreadystatechange = function() {
+      
+      var result;
+      
+      // Ignore the event if the process isn't complete
+      if (request.readyState !== 4) {
         return;
       }
       
-      // The loadTrace() handler has to do another asynchronous call to
-      // load the image, so nothing further required here
+      // If the request wasn't successful, then loadFailed() and proceed
+      // no further
+      if (request.status !== 200) {
+        lilac_mesh_html.loadFailed("Failed to read /config.json!");
+        return;
+      }
+      
+      // If we got here, we successfully loaded the file as text, so get
+      // the text as a string
+      result = request.responseText;
+      
+      // Parse the result as JSON
+      try {
+        result = JSON.parse(result);
+      } catch (ex) {
+        lilac_mesh_html.loadFailed(
+            "Failed to parse /config.json as JSON!");
+        return;
+      }
+      
+      // The parsed JSON must be an object
+      if ((typeof result !== "object") || (result instanceof Array)) {
+        lilac_mesh_html.loadFailed(
+          "/config.json is not a JSON object!");
+        return;
+      }
+      
+      // The parsed JSON must have a property "trace_image" that is a
+      // string
+      if ((!("trace_image" in result)) ||
+            (typeof result.trace_image !== "string")) {
+        lilac_mesh_html.loadFailed(
+          "/config.json is missing a trace_image property " +
+          "with string value!");
+        return;
+      }
+      
+      // We can now call through to the next load stage with the path to
+      // the tracing image
+      loadWithTracePath(result.trace_image);
     };
     
-    // Start things off either asynchronously reading the mesh file (if
-    // one was provided) or asynchronously reading the trace file
-    if (meshReader !== false) {
-      meshReader.readAsText(fMesh);
-    
-    } else {
-      traceReader.readAsDataURL(fTrace);
-    }
+    // Asynchronously start the request
+    request.send(null);
   }
   
   /*
